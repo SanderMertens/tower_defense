@@ -7,7 +7,8 @@ using namespace flecs::components;
 static const float CameraAcceleration = 0.2;
 static const float CameraDeceleration = 0.1;
 static const float CameraMaxSpeed = 0.05;
-static const float CameraDistance = 5.0;
+static const float CameraDistance = 5.5;
+static const float CameraHeight = 4.0;
 static const float CameraLookatRadius = 2.0;
 
 static const float EnemySize = 0.2;
@@ -15,7 +16,7 @@ static const float EnemySpeed = 2;
 static const float EnemySpawnInterval = 0.5;
 
 static const float TileSize = 1;
-static const float TileHeight = 0.4;
+static const float TileHeight = 0.2;
 static const float PathHeight = 0.1;
 static const float TileSpacing = 0.0;
 static const int TileCountX = 10;
@@ -125,11 +126,11 @@ float from_z(float z) {
 // Init UI
 void init_ui(flecs::world& ecs, flecs::entity game) {
     gui::Camera camera_data;
-    camera_data.set_position(0, 5, 0);
+    camera_data.set_position(0, CameraHeight, 0);
     camera_data.set_lookat(0, 0, to_z(TileCountZ / 2));
     auto camera = ecs.entity("Camera")
         .set<gui::Camera>(camera_data)
-        .set<CameraController>({0, 0}); // Spherical camera coordinate
+        .set<CameraController>({-GLM_PI / 2, 0}); // Spherical camera coordinate
 
     gui::Window window_data;
     window_data.width = 800;
@@ -241,7 +242,6 @@ void MoveCamera(flecs::iter& it) {
     ctrl->r += ctrl->v;
 
     camera->position[0] = cos(ctrl->r) * CameraDistance;
-    camera->position[1] = CameraDistance;
     camera->position[2] = sin(ctrl->r) * CameraDistance + to_z(TileCountZ / 2);
 
     camera->lookat[0] = cos(ctrl->r) * CameraLookatRadius;
