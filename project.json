@@ -11,6 +11,7 @@
             "flecs.components.graphics",
             "flecs.components.geometry",
             "flecs.components.gui",
+            "flecs.components.input",
             "flecs.components.physics",
             "flecs.systems.transform",
             "flecs.systems.sdl2",

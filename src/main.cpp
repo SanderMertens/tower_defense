@@ -4,7 +4,16 @@
 using namespace flecs::components;
 
 // Game constants
-static const float EnemySize = 0.5;
+static const float CameraAcceleration = 0.2;
+static const float CameraDeceleration = 0.1;
+static const float CameraMaxSpeed = 0.05;
+static const float CameraDistance = 5.0;
+static const float CameraLookatRadius = 2.0;
+
+static const float EnemySize = 0.2;
+static const float EnemySpeed = 2;
+static const float EnemySpawnInterval = 0.5;
+
 static const float TileSize = 1;
 static const float TileHeight = 0.4;
 static const float PathHeight = 0.1;
@@ -56,6 +65,7 @@ struct Game {
     flecs::entity tile_prefab;
     flecs::entity path_prefab;
     flecs::entity enemy_prefab;
+    flecs::entity turret_prefab;
     flecs::entity level;
 };
 
@@ -74,6 +84,13 @@ struct Level {
 };
 
 struct Enemy { };
+
+struct Turret { };
+
+struct CameraController {
+    float r;
+    float v;
+};
 
 struct Direction {
     int value;
@@ -109,8 +126,10 @@ float from_z(float z) {
 void init_ui(flecs::world& ecs, flecs::entity game) {
     gui::Camera camera_data;
     camera_data.set_position(0, 5, 0);
-    camera_data.set_lookat(0, 0, 2.5);
-    auto camera = ecs.entity().set<gui::Camera>(camera_data);
+    camera_data.set_lookat(0, 0, to_z(TileCountZ / 2));
+    auto camera = ecs.entity("Camera")
+        .set<gui::Camera>(camera_data)
+        .set<CameraController>({0, 0}); // Spherical camera coordinate
 
     gui::Window window_data;
     window_data.width = 800;
@@ -179,12 +198,54 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
 
     g->path_prefab = ecs.prefab()
         .set<geometry::Color>({0.3, 0.3, 0.3})
-        .set<geometry::Box>({TileSize, PathHeight, TileSize});
+        .set<geometry::Box>({TileSize + TileSpacing, PathHeight, TileSize + TileSpacing});
 
     g->enemy_prefab = ecs.prefab()
         .add<Enemy>()
         .set<geometry::Color>({1.0, 0.3, 0.3})
-        .set<geometry::Box>({EnemySize, EnemySize, EnemySize});        
+        .set<geometry::Box>({EnemySize, EnemySize, EnemySize});
+}
+
+// Move camera around with keyboard
+void MoveCamera(flecs::iter& it) {
+    auto input = it.column<const input::Input>(1);
+    auto camera = it.column<gui::Camera>(2);
+    auto ctrl = it.column<CameraController>(3);
+
+    // Accelerate camera if keys are pressed
+    if (input->keys[ECS_KEY_D].state) {
+        ctrl->v -= CameraAcceleration * it.delta_time();
+    }
+    if (input->keys[ECS_KEY_A].state) {
+        ctrl->v += CameraAcceleration * it.delta_time();
+    }    
+
+    // Decelerate camera each frame
+    if (ctrl->v > 0) {
+        ctrl->v -= CameraDeceleration * it.delta_time();
+        if (ctrl->v < 0) {
+            ctrl->v = 0;
+        }
+    }
+    if (ctrl->v < 0) {
+        ctrl->v += CameraDeceleration * it.delta_time();
+        if (ctrl->v > 0) {
+            ctrl->v = 0;
+        }
+    }
+
+    // Make sure speed doesn't exceed limits
+    ctrl->v = glm_clamp(ctrl->v, -CameraMaxSpeed, CameraMaxSpeed);
+
+    // Update camera spherical coordinates
+    ctrl->r += ctrl->v;
+
+    camera->position[0] = cos(ctrl->r) * CameraDistance;
+    camera->position[1] = CameraDistance;
+    camera->position[2] = sin(ctrl->r) * CameraDistance + to_z(TileCountZ / 2);
+
+    camera->lookat[0] = cos(ctrl->r) * CameraLookatRadius;
+    camera->lookat[2] = sin(ctrl->r) * CameraLookatRadius + to_z(TileCountZ / 2);
 }
 
 // Periodic system that spawns new enemies
@@ -202,7 +263,7 @@ void SpawnEnemy(flecs::iter& it) {
 }
 
 // Check if enemy needs to change direction
-void find_path(transform::Position3& p, Direction& d, const Level* lvl) {
+bool find_path(transform::Position3& p, Direction& d, const Level* lvl) {
     // Check if enemy is in center of tile
     float t_x = from_x(p.x);
     float t_y = from_z(p.z);
@@ -212,7 +273,7 @@ void find_path(transform::Position3& p, Direction& d, const Level* lvl) {
     float td_y = t_y - ti_y;
 
     // If enemy is in center of tile, decide where to go next
-    if (td_x < 0.1 && td_y < 0.1) {
+    if (td_x < 0.05 && td_y < 0.05) {
         grid<bool> *tiles = lvl->map;
 
         // Compute backwards direction so we won't try to go there
@@ -228,7 +289,7 @@ void find_path(transform::Position3& p, Direction& d, const Level* lvl) {
                     // Next tile is still on the grid, test if it's a path
                     if (tiles[0](n_x, n_y)) {
                         // Next tile is a path, so continue along current direction
-                        return;
+                        return false;
                     }
                 }
             }
@@ -238,7 +299,12 @@ void find_path(transform::Position3& p, Direction& d, const Level* lvl) {
                 d.value = (d.value + 1) % 4;
             } while (d.value == backwards);
         }
+
+        // If enemy was not able to find a next direction, it reached the end
+        return true;        
     }
+
+    return false;
 }
 
 // Progress enemies along path
@@ -251,20 +317,31 @@ void MoveEnemy(flecs::iter& it,
     const Level* lvl = g->level.get<Level>();
 
     for (int i = 0; i < it.count(); i ++) {
-        find_path(p[i], d[i], lvl);
-        p[i].x += dir[d[i].value].x * it.delta_time();
-        p[i].z += dir[d[i].value].y * it.delta_time();
+        if (find_path(p[i], d[i], lvl)) {
+            it.entity(i).destruct();
+        } else {
+            p[i].x += dir[d[i].value].x * EnemySpeed * it.delta_time();
+            p[i].z += dir[d[i].value].y * EnemySpeed * it.delta_time();
+        }
     }
 }
 
 // Init systems
 void init_systems(flecs::world& ecs) {
-    ecs.system<>("SpawnEnemy", "Game:Game")
-        .interval(1.0)
-        .action(SpawnEnemy);
+    ecs.system<>("MoveCamera", 
+        "$:flecs.components.input.Input," 
+        "Camera:flecs.components.gui.Camera,"
+        "CameraController")
+            .action(MoveCamera);
 
-    ecs.system<transform::Position3, Direction>("MoveEnemy", "Game:Game, ANY:Enemy")
-        .action(MoveEnemy);
+    ecs.system<>("SpawnEnemy", 
+        "Game:Game")
+            .interval(EnemySpawnInterval)
+            .action(SpawnEnemy);
+
+    ecs.system<transform::Position3, Direction>("MoveEnemy", 
+        "Game:Game, ANY:Enemy")
+            .action(MoveEnemy);
 }
 
 int main(int argc, char *argv[]) {
@@ -277,6 +354,7 @@ int main(int argc, char *argv[]) {
     ecs.import<flecs::components::geometry>();
     ecs.import<flecs::components::gui>();
     ecs.import<flecs::components::physics>();
+    ecs.import<flecs::components::input>();
     ecs.import<flecs::systems::transform>();
     ecs.import<flecs::systems::sdl2>();
     ecs.import<flecs::systems::sokol>();
