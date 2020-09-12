@@ -187,6 +187,18 @@ void init_level(flecs::world& ecs, flecs::entity game) {
             t.set<transform::Position3>({xc, 0, zc});                
         }
     }
+
+    ecs.entity()
+        .add_instanceof(g->turret_prefab)
+        .set<transform::Position3>({to_x(3), TileHeight / 2, to_z(5)});
+
+    ecs.entity()
+        .add_instanceof(g->turret_prefab)
+        .set<transform::Position3>({to_x(3), TileHeight / 2, to_z(6)}); 
+
+    ecs.entity()
+        .add_instanceof(g->turret_prefab)
+        .set<transform::Position3>({to_x(3), TileHeight / 2, to_z(7)});                
 }
 
 // Init prefabs
@@ -205,6 +217,37 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
         .add<Enemy>()
         .set<geometry::Color>({1.0, 0.3, 0.3})
         .set<geometry::Box>({EnemySize, EnemySize, EnemySize});
+
+    g->turret_prefab = ecs.prefab()
+        .add<Turret>();
+
+        // Feet
+        ecs.prefab()
+            .add_childof(g->turret_prefab)
+            .set<geometry::Color>({0.1, 0.1, 0.1})
+            .set<geometry::Box>({0.3, 0.1, 0.3})
+            .set<transform::Position3>({0, 0.05, 0});
+
+        // Base
+        ecs.prefab()
+            .add_childof(g->turret_prefab)
+            .set<geometry::Color>({0.5, 0.5, 0.5})
+            .set<geometry::Box>({0.2, 0.3, 0.2})
+            .set<transform::Position3>({0, 0.15, 0});
+
+        // Head
+        auto turret_head = ecs.prefab()
+            .add_childof(g->turret_prefab)
+            .set<geometry::Color>({0.35, 0.4, 0.3})
+            .set<geometry::Box>({0.4, 0.2, 0.4})
+            .set<transform::Position3>({0, 0.4, 0});
+
+            // Cannon
+            ecs.prefab()
+                .add_childof(turret_head)
+                .set<geometry::Color>({0.1, 0.1, 0.1})
+                .set<geometry::Box>({0.4, 0.1, 0.1})
+                .set<transform::Position3>({0.3, 0.0, 0});
 }
 
 // Move camera around with keyboard
