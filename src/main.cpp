@@ -2,6 +2,12 @@
 #include <vector>
 
 using namespace flecs::components;
+using Position = transform::Position3;
+using Rotation = transform::Rotation3;
+using Color = geometry::Color;
+using Box = geometry::Box;
+
+#define PI_2 ((float)(GLM_PI * 2))
 
 // Game constants
 static const float CameraAcceleration = 0.2;
@@ -12,8 +18,10 @@ static const float CameraHeight = 4.0;
 static const float CameraLookatRadius = 2.0;
 
 static const float EnemySize = 0.2;
-static const float EnemySpeed = 2;
-static const float EnemySpawnInterval = 0.5;
+static const float EnemySpeed = 1.5;
+static const float EnemySpawnInterval = 1.0;
+
+static const float TurretRotateSpeed = 2.0;
 
 static const float TileSize = 1;
 static const float TileHeight = 0.2;
@@ -60,7 +68,7 @@ private:
     std::vector<T> m_values;
 };
 
-// Game components
+// Global game data
 struct Game {
     flecs::entity window;
     flecs::entity tile_prefab;
@@ -70,6 +78,7 @@ struct Game {
     flecs::entity level;
 };
 
+// Level map and spawn point for enemies
 struct Level {
     Level() {
         map = nullptr;
@@ -84,17 +93,33 @@ struct Level {
     transform::Position2 spawn_point;
 };
 
+// Enemy tag
 struct Enemy { };
 
-struct Turret { };
+// Movement direction for enemies
+struct Direction {
+    int value;
+};
 
+// Turret data
+struct Turret { 
+    flecs::entity head;
+};
+
+// Tracker for enemy target
+struct Target {
+    flecs::entity target;
+};
+
+// Query to find a target
+struct TargetQuery {
+    flecs::query<Position> query;
+};
+
+// Camera movement controller
 struct CameraController {
     float r;
     float v;
-};
-
-struct Direction {
-    int value;
 };
 
 // Calculate coordinate from position on the grid
@@ -123,6 +148,10 @@ float from_z(float z) {
     return from_coord(z);
 }
 
+float* to_vec3(Position& p) {
+    return reinterpret_cast<float*>(&p);
+}
+
 // Init UI
 void init_ui(flecs::world& ecs, flecs::entity game) {
     gui::Camera camera_data;
@@ -133,8 +162,8 @@ void init_ui(flecs::world& ecs, flecs::entity game) {
         .set<CameraController>({-GLM_PI / 2, 0}); // Spherical camera coordinate
 
     gui::Window window_data;
-    window_data.width = 800;
-    window_data.height = 600;
+    window_data.width = 1024;
+    window_data.height = 800;
     auto window = ecs.entity().set<gui::Window>(window_data);
 
     gui::Canvas canvas_data;
@@ -184,21 +213,33 @@ void init_level(flecs::world& ecs, flecs::entity game) {
                 t.add_instanceof(g->tile_prefab);
             }
 
-            t.set<transform::Position3>({xc, 0, zc});                
+            t.set<Position>({xc, 0, zc});                
         }
     }
 
     ecs.entity()
         .add_instanceof(g->turret_prefab)
-        .set<transform::Position3>({to_x(3), TileHeight / 2, to_z(5)});
+        .set<Position>({to_x(8), TileHeight / 2, to_z(4)}); 
 
     ecs.entity()
         .add_instanceof(g->turret_prefab)
-        .set<transform::Position3>({to_x(3), TileHeight / 2, to_z(6)}); 
+        .set<Position>({to_x(7), TileHeight / 2, to_z(4)}); 
 
     ecs.entity()
         .add_instanceof(g->turret_prefab)
-        .set<transform::Position3>({to_x(3), TileHeight / 2, to_z(7)});                
+        .set<Position>({to_x(6), TileHeight / 2, to_z(4)}); 
+
+    ecs.entity()
+        .add_instanceof(g->turret_prefab)
+        .set<Position>({to_x(3), TileHeight / 2, to_z(7)}); 
+
+    ecs.entity()
+        .add_instanceof(g->turret_prefab)
+        .set<Position>({to_x(3), TileHeight / 2, to_z(6)});
+
+    ecs.entity()
+        .add_instanceof(g->turret_prefab)
+        .set<Position>({to_x(3), TileHeight / 2, to_z(5)});        
 }
 
 // Init prefabs
@@ -206,48 +247,60 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
     Game *g = game.get_mut<Game>();
 
     g->tile_prefab = ecs.prefab()
-        .set<geometry::Color>({1.0, 1.0, 1.0})
-        .set<geometry::Box>({TileSize, TileHeight, TileSize});
+        .set<Color>({1.0, 1.0, 1.0})
+        .set<Box>({TileSize, TileHeight, TileSize});
 
     g->path_prefab = ecs.prefab()
-        .set<geometry::Color>({0.3, 0.3, 0.3})
-        .set<geometry::Box>({TileSize + TileSpacing, PathHeight, TileSize + TileSpacing});
+        .set<Color>({0.3, 0.3, 0.3})
+        .set<Box>({TileSize + TileSpacing, PathHeight, TileSize + TileSpacing});
 
     g->enemy_prefab = ecs.prefab()
         .add<Enemy>()
-        .set<geometry::Color>({1.0, 0.3, 0.3})
-        .set<geometry::Box>({EnemySize, EnemySize, EnemySize});
+        .set<Color>({1.0, 0.3, 0.3})
+        .set<Box>({EnemySize, EnemySize, EnemySize});
 
     g->turret_prefab = ecs.prefab()
-        .add<Turret>();
+        .add<Turret>()
+        .add<Target>()
+        .set<TargetQuery>({ ecs.query<Position>("ANY:Enemy") })
+        .add_owned<Turret>()
+        .add_owned<Target>();
 
         // Feet
-        ecs.prefab()
+        ecs.prefab("TurretFeet")
             .add_childof(g->turret_prefab)
-            .set<geometry::Color>({0.1, 0.1, 0.1})
-            .set<geometry::Box>({0.3, 0.1, 0.3})
-            .set<transform::Position3>({0, 0.05, 0});
+            .set<Color>({0.1, 0.1, 0.1})
+            .set<Box>({0.3, 0.1, 0.3})
+            .set<Position>({0, 0.05, 0});
 
         // Base
-        ecs.prefab()
+        ecs.prefab("TurretBase")
             .add_childof(g->turret_prefab)
-            .set<geometry::Color>({0.5, 0.5, 0.5})
-            .set<geometry::Box>({0.2, 0.3, 0.2})
-            .set<transform::Position3>({0, 0.15, 0});
+            .set<Color>({0.5, 0.5, 0.5})
+            .set<Box>({0.2, 0.3, 0.2})
+            .set<Position>({0, 0.15, 0});
 
         // Head
-        auto turret_head = ecs.prefab()
+        auto turret_head = ecs.prefab("TurretHead")
             .add_childof(g->turret_prefab)
-            .set<geometry::Color>({0.35, 0.4, 0.3})
-            .set<geometry::Box>({0.4, 0.2, 0.4})
-            .set<transform::Position3>({0, 0.4, 0});
+            .set<Color>({0.35, 0.4, 0.3})
+            .set<Box>({0.4, 0.2, 0.4})
+            .set<Position>({0, 0.4, 0})
+            .set<Rotation>({0, 0.0, 0});
 
             // Cannon
-            ecs.prefab()
+            ecs.prefab("TurretCannon")
                 .add_childof(turret_head)
-                .set<geometry::Color>({0.1, 0.1, 0.1})
-                .set<geometry::Box>({0.4, 0.1, 0.1})
-                .set<transform::Position3>({0.3, 0.0, 0});
+                .set<Color>({0.1, 0.1, 0.1})
+                .set<Box>({0.4, 0.1, 0.1})
+                .set<Position>({0.3, 0.0, 0});
+
+    // When Turret is set, initialize it with the head child
+    ecs.system<Turret>()
+        .kind(flecs::OnSet)
+        .each([](flecs::entity e, Turret& t) {
+            t.head = e.lookup("TurretHead");
+        });
 }
 
 // Move camera around with keyboard
@@ -300,13 +353,13 @@ void SpawnEnemy(flecs::iter& it) {
     ecs.entity()
         .add_instanceof(g->enemy_prefab)
         .set<Direction>({0})
-        .set<transform::Position3>({
+        .set<Position>({
             lvl->spawn_point.x, 0.3, lvl->spawn_point.y
         });
 }
 
 // Check if enemy needs to change direction
-bool find_path(transform::Position3& p, Direction& d, const Level* lvl) {
+bool find_path(Position& p, Direction& d, const Level* lvl) {
     // Check if enemy is in center of tile
     float t_x = from_x(p.x);
     float t_y = from_z(p.z);
@@ -352,7 +405,7 @@ bool find_path(transform::Position3& p, Direction& d, const Level* lvl) {
 
 // Progress enemies along path
 void MoveEnemy(flecs::iter& it, 
-    flecs::column<transform::Position3> p,
+    flecs::column<Position> p,
     flecs::column<Direction> d) 
 {
     auto ecs = it.world();
@@ -369,22 +422,122 @@ void MoveEnemy(flecs::iter& it,
     }
 }
 
+// Find target for turret
+void FindTarget(flecs::iter& it, 
+    flecs::column<Target> target, 
+    flecs::column<Position> p) 
+{
+    auto tq = it.column<const TargetQuery>(3);
+
+    // For each turret, find closest enemy
+    for (auto i : it) {
+        // if (target[i].target) {
+        //     // If turret already has a target, keep it until it becomes invalid
+        //     continue;
+        // }
+
+        flecs::entity enemy;
+        float distance = 0, min_distance = 0;
+        auto pos = p[i];
+
+        tq->query.each([&](
+            flecs::entity e, Position& target_pos) 
+        {
+            distance = glm_vec3_distance(to_vec3(pos), to_vec3(target_pos));
+            if (!min_distance || distance < min_distance) {
+                min_distance = distance;
+                enemy = e;
+            }
+        });
+
+        target[i].target = enemy;
+    }
+}
+
+float look_at(vec3 eye, vec3 dest) {
+    vec3 diff;
+    
+    glm_vec3_sub(dest, eye, diff);
+    float x = fabs(diff[0]), z = fabs(diff[2]);
+    bool x_sign = diff[0] < 0, z_sign = diff[2] < 0;
+    float r = atan(z / x);
+
+    if (z_sign) {
+        r += GLM_PI;
+    }
+
+    if (z_sign == x_sign) {
+        r = -r + GLM_PI;
+    }
+
+    return r + GLM_PI;
+}
+
+float rotate_to(float cur, float target, float increment) {
+    cur -= floor(cur / PI_2) * PI_2;
+    target -= floor(target / PI_2) * PI_2;
+
+    if (cur - target > GLM_PI) {
+        cur -= PI_2;
+    } else if (cur - target < -GLM_PI) {
+        cur += PI_2;
+    }
+    
+    if (cur > target) {
+        cur -= increment;
+        if (cur < target) {
+            cur = target;
+        }
+    } else {
+        cur += increment;
+        if (cur > target) {
+            cur = target;
+        }
+    }
+
+    return cur;
+}
+
+// Aim turret at target
+void AimTarget(flecs::iter& it, 
+    flecs::column<Turret> turret, 
+    flecs::column<Target> target, 
+    flecs::column<Position> p) 
+{
+    for (auto i : it) {
+        flecs::entity enemy = target[i].target;
+        if (enemy) {
+            Position target_p = enemy.get<Position>()[0];
+            float angle = look_at(to_vec3(p[i]), to_vec3(target_p));
+            Rotation *r = turret[i].head.get_mut<Rotation>();
+            r->y = rotate_to(r->y, angle, TurretRotateSpeed * it.delta_time());
+        }
+    }
+}
+
 // Init systems
 void init_systems(flecs::world& ecs) {
     ecs.system<>("MoveCamera", 
-        "$:flecs.components.input.Input," 
-        "Camera:flecs.components.gui.Camera,"
-        "CameraController")
-            .action(MoveCamera);
+            "$:flecs.components.input.Input," 
+            "Camera:flecs.components.gui.Camera,"
+            "CameraController")
+        .action(MoveCamera);
 
     ecs.system<>("SpawnEnemy", 
-        "Game:Game")
-            .interval(EnemySpawnInterval)
-            .action(SpawnEnemy);
+            "Game:Game")
+        .interval(EnemySpawnInterval)
+        .action(SpawnEnemy);
 
-    ecs.system<transform::Position3, Direction>("MoveEnemy", 
-        "Game:Game, ANY:Enemy")
-            .action(MoveEnemy);
+    ecs.system<Position, Direction>("MoveEnemy", 
+            "Game:Game, ANY:Enemy")
+        .action(MoveEnemy);
+
+    ecs.system<Target, Position>("FindTarget",
+            "SHARED:TargetQuery")
+        .action(FindTarget);
+
+    ecs.system<Turret, Target, Position>("AimTarget")
+        .action(AimTarget);
 }
 
 int main(int argc, char *argv[]) {
@@ -403,7 +556,7 @@ int main(int argc, char *argv[]) {
     ecs.import<flecs::systems::sokol>();
 
     auto game = ecs.entity("Game")
-        .set<Game>({});
+        .add<Game>();
 
     init_ui(ecs, game);
 
