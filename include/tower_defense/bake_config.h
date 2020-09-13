@@ -26,6 +26,7 @@
 #include <flecs_components_input.h>
 #include <flecs_components_physics.h>
 #include <flecs_systems_transform.h>
+#include <flecs_systems_physics.h>
 #include <flecs_systems_sdl2.h>
 #include <flecs_systems_sokol.h>
 

@@ -4,27 +4,34 @@
 using namespace flecs::components;
 using Position = transform::Position3;
 using Rotation = transform::Rotation3;
+using Velocity = physics::Velocity3;
 using Color = geometry::Color;
 using Box = geometry::Box;
 
-#define PI_2 ((float)(GLM_PI * 2))
+#define ECS_PI_2 ((float)(GLM_PI * 2))
 
 // Game constants
 static const float CameraAcceleration = 0.2;
 static const float CameraDeceleration = 0.1;
 static const float CameraMaxSpeed = 0.05;
-static const float CameraDistance = 5.5;
-static const float CameraHeight = 4.0;
+static const float CameraDistance = 8;
+static const float CameraHeight = 6.0;
 static const float CameraLookatRadius = 2.0;
 
-static const float EnemySize = 0.2;
+static const float EnemySize = 0.3;
 static const float EnemySpeed = 1.5;
 static const float EnemySpawnInterval = 1.0;
 
-static const float TurretRotateSpeed = 2.0;
+static const float TurretRotateSpeed = 3.0;
+static const float TurretFireInterval = 0.2;
+static const float TurretRange = 3.0;
 
-static const float TileSize = 1;
-static const float TileHeight = 0.2;
+static const float BulletSpeed = 10.0;
+static const float BulletLifespan = 0.5;
+static const float BulletDamage = 1.0;
+
+static const float TileSize = 1.5;
+static const float TileHeight = 0.4;
 static const float PathHeight = 0.1;
 static const float TileSpacing = 0.0;
 static const int TileCountX = 10;
@@ -75,6 +82,7 @@ struct Game {
     flecs::entity path_prefab;
     flecs::entity enemy_prefab;
     flecs::entity turret_prefab;
+    flecs::entity bullet_prefab;
     flecs::entity level;
 };
 
@@ -96,6 +104,15 @@ struct Level {
 // Enemy tag
 struct Enemy { };
 
+// Bullet component
+struct Bullet {
+    Bullet() {
+        lifespan = 0;
+    }
+
+    float lifespan;
+};
+
 // Movement direction for enemies
 struct Direction {
     int value;
@@ -108,7 +125,18 @@ struct Turret {
 
 // Tracker for enemy target
 struct Target {
+    Target() {
+        lock = false;
+        
+        prev_position[0] = 0;
+        prev_position[1] = 0;
+        prev_position[2] = 0;
+    }
+
     flecs::entity target;
+    vec3 prev_position;
+    vec3 aim_position;
+    bool lock;
 };
 
 // Query to find a target
@@ -219,6 +247,10 @@ void init_level(flecs::world& ecs, flecs::entity game) {
 
     ecs.entity()
         .add_instanceof(g->turret_prefab)
+        .set<Position>({to_x(7), TileHeight / 2, to_z(8)}); 
+
+    ecs.entity()
+        .add_instanceof(g->turret_prefab)
         .set<Position>({to_x(8), TileHeight / 2, to_z(4)}); 
 
     ecs.entity()
@@ -259,6 +291,12 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
         .set<Color>({1.0, 0.3, 0.3})
         .set<Box>({EnemySize, EnemySize, EnemySize});
 
+    g->bullet_prefab = ecs.prefab()
+        .add<Bullet>()
+        .set<Color>({0, 0, 0})
+        .set<Box>({0.06, 0.06, 0.06})
+        .add_owned<Bullet>();
+
     g->turret_prefab = ecs.prefab()
         .add<Turret>()
         .add<Target>()
@@ -276,7 +314,7 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
         // Base
         ecs.prefab("TurretBase")
             .add_childof(g->turret_prefab)
-            .set<Color>({0.5, 0.5, 0.5})
+            .set<Color>({0.15, 0.15, 0.15})
             .set<Box>({0.2, 0.3, 0.2})
             .set<Position>({0, 0.15, 0});
 
@@ -288,12 +326,18 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
             .set<Position>({0, 0.4, 0})
             .set<Rotation>({0, 0.0, 0});
 
-            // Cannon
-            ecs.prefab("TurretCannon")
+            // Cannons
+            ecs.prefab("TurretCannon1")
                 .add_childof(turret_head)
                 .set<Color>({0.1, 0.1, 0.1})
-                .set<Box>({0.4, 0.1, 0.1})
-                .set<Position>({0.3, 0.0, 0});
+                .set<Box>({0.4, 0.07, 0.07})
+                .set<Position>({0.3, 0.0, -0.1}); 
+
+            ecs.prefab("TurretCannon2")
+                .add_childof(turret_head)
+                .set<Color>({0.1, 0.1, 0.1})
+                .set<Box>({0.4, 0.07, 0.07})
+                .set<Position>({0.3, 0.0, 0.1});                         
 
     // When Turret is set, initialize it with the head child
     ecs.system<Turret>()
@@ -354,7 +398,7 @@ void SpawnEnemy(flecs::iter& it) {
         .add_instanceof(g->enemy_prefab)
         .set<Direction>({0})
         .set<Position>({
-            lvl->spawn_point.x, 0.3, lvl->spawn_point.y
+            lvl->spawn_point.x, 0.5, lvl->spawn_point.y
         });
 }
 
@@ -454,6 +498,10 @@ void FindTarget(flecs::iter& it,
     }
 }
 
+float normalize_angle(float angle) {
+    return angle - floor(angle / ECS_PI_2) * ECS_PI_2;
+}
+
 float look_at(vec3 eye, vec3 dest) {
     vec3 diff;
     
@@ -474,13 +522,13 @@ float look_at(vec3 eye, vec3 dest) {
 }
 
 float rotate_to(float cur, float target, float increment) {
-    cur -= floor(cur / PI_2) * PI_2;
-    target -= floor(target / PI_2) * PI_2;
+    cur = normalize_angle(cur);
+    target = normalize_angle(target);
 
     if (cur - target > GLM_PI) {
-        cur -= PI_2;
+        cur -= ECS_PI_2;
     } else if (cur - target < -GLM_PI) {
-        cur += PI_2;
+        cur += ECS_PI_2;
     }
     
     if (cur > target) {
@@ -508,9 +556,73 @@ void AimTarget(flecs::iter& it,
         flecs::entity enemy = target[i].target;
         if (enemy) {
             Position target_p = enemy.get<Position>()[0];
+            vec3 diff;
+            glm_vec3_sub(to_vec3(target_p), target[i].prev_position, diff);
+
+            target[i].prev_position[0] = target_p.x;
+            target[i].prev_position[1] = target_p.y;
+            target[i].prev_position[2] = target_p.z;
+
+            float distance = glm_vec3_distance(to_vec3(p[i]), to_vec3(target_p));
+
+            // Correct for movement
+            glm_vec3_scale(diff, distance * 5, diff);
+            glm_vec3_add(to_vec3(target_p), diff, to_vec3(target_p));
+
+            target[i].aim_position[0] = target_p.x;
+            target[i].aim_position[1] = target_p.y;
+            target[i].aim_position[2] = target_p.z;            
+
             float angle = look_at(to_vec3(p[i]), to_vec3(target_p));
             Rotation *r = turret[i].head.get_mut<Rotation>();
             r->y = rotate_to(r->y, angle, TurretRotateSpeed * it.delta_time());
+            
+            target[i].lock = (r->y == angle) * (distance < TurretRange);
+        }
+    }
+}
+
+// Fire at target
+void FireAtTarget(flecs::iter& it, 
+    flecs::column<Turret> turret, 
+    flecs::column<Target> target, 
+    flecs::column<Position> p) 
+{
+    auto ecs = it.world();
+    auto g = it.column<const Game>(4);
+
+    for (auto i : it) {
+        if (target[i].lock) {
+            vec3 v;
+            flecs::entity enemy = target[i].target;
+            vec3 target_p;
+            target_p[0] = target[i].aim_position[0];
+            target_p[1] = target[i].aim_position[1];
+            target_p[2] = target[i].aim_position[2];
+
+            glm_vec3_sub(to_vec3(p[i]), target_p, v);
+            glm_vec3_normalize(v);
+            glm_vec3_scale(v, BulletSpeed * it.delta_time(), v);
+
+            Position bullet_pos = p[i];
+            bullet_pos.y = 0.5;
+
+            ecs.entity()
+                .add_instanceof(g->bullet_prefab)
+                .set<Position>(bullet_pos)
+                .set<Velocity>({-v[0], 0, -v[2]});
+        }
+    }
+}
+
+// Expire bullets that haven't hit anything
+void ExpireBullet(flecs::iter& it, 
+    flecs::column<Bullet> bullet)
+{
+    for (auto i : it) {
+        bullet[i].lifespan += it.delta_time();
+        if (bullet[i].lifespan > BulletLifespan) {
+            it.entity(i).destruct();
         }
     }
 }
@@ -538,6 +650,14 @@ void init_systems(flecs::world& ecs) {
 
     ecs.system<Turret, Target, Position>("AimTarget")
         .action(AimTarget);
+
+    ecs.system<Turret, Target, Position>("FireAtTarget", 
+        "Game:Game")
+        .interval(TurretFireInterval)
+        .action(FireAtTarget);
+
+    ecs.system<Bullet>("ExpireBullet")
+        .action(ExpireBullet);
 }
 
 int main(int argc, char *argv[]) {
@@ -552,6 +672,7 @@ int main(int argc, char *argv[]) {
     ecs.import<flecs::components::physics>();
     ecs.import<flecs::components::input>();
     ecs.import<flecs::systems::transform>();
+    ecs.import<flecs::systems::physics>();
     ecs.import<flecs::systems::sdl2>();
     ecs.import<flecs::systems::sokol>();
 
