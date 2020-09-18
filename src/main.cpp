@@ -198,10 +198,6 @@ float from_z(float z) {
     return from_coord(z);
 }
 
-float* to_vec3(Position& p) {
-    return reinterpret_cast<float*>(&p);
-}
-
 float angle_normalize(float angle) {
     return angle - floor(angle / ECS_PI_2) * ECS_PI_2;
 }
@@ -377,8 +373,7 @@ void ClearTarget(flecs::iter& it, Target* target, Position* p) {
                 target[i].target = flecs::entity::null();
             } else {
                 Position target_pos = t.get<Position>()[0];
-                float distance = glm_vec3_distance(
-                    to_vec3(p[i]), to_vec3(target_pos));
+                float distance = glm_vec3_distance(p[i], target_pos);
                 if (distance > TurretRange) {
                     target[i].target = flecs::entity::null();
                 }
@@ -399,9 +394,9 @@ void FindTarget(flecs::iter& it, Target* target, Position* p) {
 
         flecs::entity enemy;
         float distance = 0, min_distance = 0;
-        q->query.findn(to_vec3(p[i]), TurretRange, qr[i].results);
+        q->query.findn(p[i], TurretRange, qr[i].results);
         for (auto e : qr[i].results) {
-            distance = glm_vec3_distance(to_vec3(p[i]), e.pos);
+            distance = glm_vec3_distance(p[i], e.pos);
             if (!min_distance || distance < min_distance) {
                 min_distance = distance;
                 enemy = flecs::entity(it.world(), e.e);
@@ -421,21 +416,21 @@ void AimTarget(flecs::iter& it, Turret* turret, Target* target, Position* p) {
         if (enemy) {
             Position target_p = enemy.get<Position>()[0];
             vec3 diff;
-            glm_vec3_sub(to_vec3(target_p), target[i].prev_position, diff);
+            glm_vec3_sub(target_p, target[i].prev_position, diff);
 
             target[i].prev_position[0] = target_p.x;
             target[i].prev_position[1] = target_p.y;
             target[i].prev_position[2] = target_p.z;
-            float distance = glm_vec3_distance(to_vec3(p[i]), to_vec3(target_p));
+            float distance = glm_vec3_distance(p[i], target_p);
 
             // Crude correction for enemy movement and bullet travel time
             glm_vec3_scale(diff, distance * 5, diff);
-            glm_vec3_add(to_vec3(target_p), diff, to_vec3(target_p));
+            glm_vec3_add(target_p, diff, target_p);
             target[i].aim_position[0] = target_p.x;
             target[i].aim_position[1] = target_p.y;
             target[i].aim_position[2] = target_p.z;            
 
-            float angle = look_at(to_vec3(p[i]), to_vec3(target_p));
+            float angle = look_at(p[i], target_p);
             Rotation *r = turret[i].head.get_mut<Rotation>();
             r->y = rotate_to(r->y, angle, TurretRotateSpeed * it.delta_time());
             target[i].angle = angle;
@@ -458,7 +453,7 @@ void FireAtTarget(flecs::iter& it, Turret* turret, Target* target, Position* p){
             target_p[0] = target[i].aim_position[0];
             target_p[1] = target[i].aim_position[1];
             target_p[2] = target[i].aim_position[2];
-            glm_vec3_sub(to_vec3(p[i]), target_p, v);
+            glm_vec3_sub(p[i], target_p, v);
             glm_vec3_normalize(v);
             glm_vec3_scale(v, BulletSpeed * it.delta_time(), v);
             pos.x += sin(target[i].angle) * TurretCannonOffset * turret[i].lr;
@@ -604,10 +599,18 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
         .set<Color>({0.3, 0.3, 0.3})
         .set<Box>({TileSize + TileSpacing, PathHeight, TileSize + TileSpacing});
 
+    auto bullet_query_trait = ecs.type()
+        .add_trait<SpatialQueryResult, Bullet>();
+
     g->enemy_prefab = ecs.prefab()
         .add<Enemy>()
         .set<Color>({1.0, 0.3, 0.3})
-        .set<Box>({EnemySize, EnemySize, EnemySize});
+        .set<Box>({EnemySize, EnemySize, EnemySize})
+        .set_trait<SpatialQuery, Bullet>({
+            flecs::squery(ecs, "ANY:Bullet", g->center, g->size)
+        })
+        .add_trait<SpatialQueryResult, Bullet>()
+        .add_owned(bullet_query_trait);
 
     g->bullet_prefab = ecs.prefab()
         .add<Bullet>()
@@ -622,7 +625,7 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
         .add<Turret>()
         .add<Target>()
         .set_trait<SpatialQuery, Enemy>({
-            flecs::squery(ecs, "ANY:Enemy", to_vec3(g->center), g->size)
+            flecs::squery(ecs, "ANY:Enemy", g->center, g->size)
         })
         .add_trait<SpatialQueryResult, Enemy>()
         .add_owned<Turret>()
