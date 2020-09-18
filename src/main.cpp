@@ -2,9 +2,12 @@
 #include <vector>
 
 using namespace flecs::components;
+
 using Position = transform::Position3;
 using Rotation = transform::Rotation3;
 using Velocity = physics::Velocity3;
+using SpatialQuery = flecs::systems::physics::SpatialQuery;
+using SpatialQueryResult = flecs::systems::physics::SpatialQueryResult;
 using Color = geometry::Color;
 using Box = geometry::Box;
 
@@ -144,14 +147,6 @@ struct Target {
     vec3 aim_position;
     bool lock;
     float angle;
-};
-
-struct TargetQuery {
-    flecs::squery sq;
-};
-
-struct TargetQueryResult {
-    flecs::vector<flecs::squery::entity> results;
 };
 
 // Camera components
@@ -392,16 +387,11 @@ void ClearTarget(flecs::iter& it, Target* target, Position* p) {
     }
 }
 
-// Update spatial target query
-void UpdateTargetQuery(flecs::iter& it, TargetQuery* tq) {
-    for (auto i : it) {
-        tq[i].sq.update();
-    }
-}
-
 // Find target for turret
-void FindTarget(flecs::iter& it, Target* target, Position* p, TargetQueryResult* tqr) {
-    auto tq = it.column<const TargetQuery>(4);
+void FindTarget(flecs::iter& it, Target* target, Position* p) {
+    auto qr = it.column<SpatialQueryResult>(3);
+    auto q = it.column<const SpatialQuery>(4);
+
     for (auto i : it) {
         if (target[i].target) {
             continue;
@@ -409,8 +399,8 @@ void FindTarget(flecs::iter& it, Target* target, Position* p, TargetQueryResult*
 
         flecs::entity enemy;
         float distance = 0, min_distance = 0;
-        tq->sq.findn(to_vec3(p[i]), TurretRange, tqr[i].results);
-        for (auto e : tqr[i].results) {
+        q->query.findn(to_vec3(p[i]), TurretRange, qr[i].results);
+        for (auto e : qr[i].results) {
             distance = glm_vec3_distance(to_vec3(p[i]), e.pos);
             if (!min_distance || distance < min_distance) {
                 min_distance = distance;
@@ -625,16 +615,19 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
         .set<Box>({BulletSize, BulletSize, BulletSize})
         .add_owned<Bullet>();
 
+    auto enemy_query_trait = ecs.type()
+        .add_trait<SpatialQueryResult, Enemy>();
+
     g->turret_prefab = ecs.prefab()
         .add<Turret>()
         .add<Target>()
-        .set<TargetQuery>({
+        .set_trait<SpatialQuery, Enemy>({
             flecs::squery(ecs, "ANY:Enemy", to_vec3(g->center), g->size)
         })
-        .add<TargetQueryResult>()
+        .add_trait<SpatialQueryResult, Enemy>()
         .add_owned<Turret>()
         .add_owned<Target>()
-        .add_owned<TargetQueryResult>();
+        .add_owned(enemy_query_trait);
 
         ecs.prefab()
             .add_childof(g->turret_prefab)
@@ -701,14 +694,9 @@ void init_systems(flecs::world& ecs) {
         "ClearTarget")
         .iter(ClearTarget);
 
-    // Update spatial target query (finds enemies)
-    ecs.system<TargetQuery>(
-        "UpdateTargetQuery", "Prefab")
-        .iter(UpdateTargetQuery);
-
     // Find target for turrets
-    ecs.system<Target, Position, TargetQueryResult>(
-        "FindTarget", "SHARED:TargetQuery")
+    ecs.system<Target, Position>(
+        "FindTarget", "flecs.systems.physics.SpatialQueryResult FOR Enemy, SHARED:flecs.systems.physics.SpatialQuery FOR Enemy")
         .iter(FindTarget);
 
     // Aim turret at enemies
