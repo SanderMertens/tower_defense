@@ -3,9 +3,11 @@
 
 using namespace flecs::components;
 
+// Shortcuts to imported components
 using Position = transform::Position3;
 using Rotation = transform::Rotation3;
 using Velocity = physics::Velocity3;
+using Input = input::Input;
 using SpatialQuery = flecs::systems::physics::SpatialQuery;
 using SpatialQueryResult = flecs::systems::physics::SpatialQueryResult;
 using Color = geometry::Color;
@@ -23,7 +25,7 @@ static const float CameraLookatRadius = 2.0;
 
 static const float EnemySize = 0.3;
 static const float EnemySpeed = 1.5;
-static const float EnemySpawnInterval = 1.0;
+static const float EnemySpawnInterval = 1;
 
 static const float TurretRotateSpeed = 2.0;
 static const float TurretFireInterval = 0.1;
@@ -32,7 +34,7 @@ static const float TurretCannonOffset = 0.1;
 
 static const float BulletSize = 0.06;
 static const float BulletSpeed = 10.0;
-static const float BulletLifespan = 0.5;
+static const float BulletLifespan = 1.0;
 
 static const float TileSize = 1.5;
 static const float TileHeight = 0.4;
@@ -113,6 +115,13 @@ struct Enemy { };
 
 struct Direction {
     int value;
+};
+
+struct Health {
+    Health() {
+        value = 1;
+    }
+    float value;
 };
 
 // Bullet components
@@ -303,10 +312,9 @@ float decelerate_camera(float v, float delta_time) {
 }
 
 // Move camera around with keyboard
-void MoveCamera(flecs::iter& it) {
-    auto input = it.column<const input::Input>(1);
-    auto camera = it.column<gui::Camera>(2);
-    auto ctrl = it.column<CameraController>(3);
+void MoveCamera(flecs::iter& it, CameraController *ctrl) {
+    auto input = it.column<const Input>(2);
+    auto camera = it.column<gui::Camera>(3);
 
     // Accelerate camera if keys are pressed
     if (input->keys[ECS_KEY_D].state) {
@@ -343,6 +351,7 @@ void MoveCamera(flecs::iter& it) {
 void SpawnEnemy(flecs::iter& it) {
     auto g = it.column<const Game>(1);
     const Level* lvl = g->level.get<Level>();
+
     it.world().entity().add_instanceof(g->enemy_prefab)
         .set<Direction>({0})
         .set<Position>({
@@ -384,8 +393,8 @@ void ClearTarget(flecs::iter& it, Target* target, Position* p) {
 
 // Find target for turret
 void FindTarget(flecs::iter& it, Target* target, Position* p) {
-    auto qr = it.column<SpatialQueryResult>(3);
-    auto q = it.column<const SpatialQuery>(4);
+    auto q = it.column<const SpatialQuery>(3);
+    auto qr = it.column<SpatialQueryResult>(4);
 
     for (auto i : it) {
         if (target[i].target) {
@@ -464,6 +473,28 @@ void FireAtTarget(flecs::iter& it, Turret* turret, Target* target, Position* p){
             ecs.entity().add_instanceof(g->bullet_prefab)
                 .set<Position>(pos)
                 .set<Velocity>({-v[0], 0, -v[2]});
+        }
+    }
+}
+
+// Check if enemy has been hit by a bullet
+void HitTarget(flecs::iter& it, Position* p) {
+    auto b = it.column<const Box>(2);
+    auto q = it.column<const SpatialQuery>(3);
+    auto qr = it.column<SpatialQueryResult>(4);
+
+    for (int i : it) {
+        float range;
+        if (it.is_owned(2)) {
+            range = b[i].width / 2;
+        } else {
+            range = b->width / 2;
+        }
+
+        q->query.findn(p[i], range, qr[i].results);
+        for (auto e : qr[i].results) {
+            auto bullet = it.world().entity(e.e);
+            bullet.destruct();
         }
     }
 }
@@ -604,12 +635,15 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
 
     g->enemy_prefab = ecs.prefab()
         .add<Enemy>()
+        .add<Health>()
         .set<Color>({1.0, 0.3, 0.3})
         .set<Box>({EnemySize, EnemySize, EnemySize})
         .set_trait<SpatialQuery, Bullet>({
             flecs::squery(ecs, "ANY:Bullet", g->center, g->size)
         })
         .add_trait<SpatialQueryResult, Bullet>()
+        .add_owned<Color>()
+        .add_owned<Health>()
         .add_owned(bullet_query_trait);
 
     g->bullet_prefab = ecs.prefab()
@@ -674,11 +708,8 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
 // Init systems
 void init_systems(flecs::world& ecs) {
     // Move camera with keyboard
-    ecs.system<>(
-        "MoveCamera", 
-        "$:flecs.components.input.Input," 
-        "Camera:flecs.components.gui.Camera," 
-        "CameraController")
+    ecs.system<CameraController>(
+        "MoveCamera", "$:Input, Camera:flecs.components.gui.Camera")
         .iter(MoveCamera);
 
     // Spawn enemies periodically
@@ -699,12 +730,12 @@ void init_systems(flecs::world& ecs) {
 
     // Find target for turrets
     ecs.system<Target, Position>(
-        "FindTarget", "flecs.systems.physics.SpatialQueryResult FOR Enemy, SHARED:flecs.systems.physics.SpatialQuery FOR Enemy")
+        "FindTarget", "SHARED:SpatialQuery FOR Enemy, SpatialQueryResult FOR Enemy")
         .iter(FindTarget);
 
     // Aim turret at enemies
     ecs.system<Turret, Target, Position>(
-        "AimTarget", "[out] :flecs.components.transform.Rotation3")
+        "AimTarget", "[out] :Rotation")
         .iter(AimTarget);
 
     // Fire bullets at enemies
@@ -712,6 +743,11 @@ void init_systems(flecs::world& ecs) {
         "FireAtTarget", "Game:Game, [out] :*")
         .interval(TurretFireInterval)
         .iter(FireAtTarget);
+
+    // Test for collisions with enemies
+    ecs.system<Position>(
+        "HitTarget", "ANY:Box, SHARED:SpatialQuery FOR Bullet, SpatialQueryResult FOR Bullet, ANY:Enemy, [out] :*")
+        .iter(HitTarget);
 
     // Delete bullets that haven't hit anything
     ecs.system<Bullet>(
@@ -731,6 +767,14 @@ int main(int argc, char *argv[]) {
     ecs.import<flecs::systems::physics>();
     ecs.import<flecs::systems::sdl2>();
     ecs.import<flecs::systems::sokol>();
+
+    // Add aliases for components from modules for more readable queries
+    ecs.use<SpatialQuery>();
+    ecs.use<SpatialQueryResult>();
+    ecs.use<Input>();
+    ecs.use<Position>("Position");
+    ecs.use<Rotation>("Rotation");
+    ecs.use<Box>();
 
     auto game = init_game(ecs);
     init_ui(ecs, game);
