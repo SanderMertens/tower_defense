@@ -26,31 +26,33 @@ static const float CameraHeight = 6.0;
 static const float CameraLookatRadius = 2.0;
 
 static const float EnemySize = 0.3;
-static const float EnemySpeed = 2.5;
-static const float EnemySpawnInterval = 0.01;
+static const float EnemySpeed = 2.0;
+static const float EnemySpawnInterval = 0.06;
 
-static const float TurretRotateSpeed = 1.5;
+static const float TurretRotateSpeed = 2.0;
 static const float TurretFireInterval = 0.1;
-static const float TurretRange = 3.0;
+static const float TurretRange = 2.5;
 static const float TurretCannonOffset = 0.1;
 static const float TurretCannonLength = 0.3;
 
 static const float BulletSize = 0.05;
 static const float BulletSpeed = 12.0;
 static const float BulletLifespan = 0.5;
-static const float BulletDamage = 0.03;
+static const float BulletDamage = 0.015;
 
-static const float BeamDamage = 0.07;
+static const float IonSize = 0.03;
+static const float IonLifespan = 1.5;
+static const float IonDecay = 0.975;
 
-static const float ShellSize = 0.03;
-static const float ShellSpeed = 0.05;
-static const float ShellLifespan = 0.3;
+static const float BeamFireInterval = 0.1;
+static const float BeamDamage = 0.1;
+static const float BeamSize = 0.05;
 
 static const float FireballSize = 0.15;
 static const float FireballSizeDecay = 0.8;
 static const float FireballLifespan = 0.1;
 
-static const float BoltSize = 0.4;
+static const float BoltSize = 0.3;
 static const float BoltSizeDecay = 0.9;
 static const float BoltLifespan = 5.3;
 
@@ -109,7 +111,8 @@ private:
     std::vector<T> m_values;
 };
 
-// Global game data
+// Components
+
 struct Game {
     flecs::entity tile_prefab;
     flecs::entity path_prefab;
@@ -117,8 +120,8 @@ struct Game {
     flecs::entity cannon_prefab;
     flecs::entity railgun_prefab;
     flecs::entity bullet_prefab;
+    flecs::entity ion_prefab;
     flecs::entity beam_prefab;
-    flecs::entity shell_prefab;
     flecs::entity fireball_prefab;
     flecs::entity bolt_prefab;
     flecs::entity smoke_prefab;
@@ -130,7 +133,6 @@ struct Game {
     float size;        
 };
 
-// Level map and spawn point for enemies
 struct Level {
     Level() {
         map = nullptr;
@@ -145,7 +147,6 @@ struct Level {
     transform::Position2 spawn_point;  
 };
 
-// Particles
 struct Particle {
     float size_decay;
     float color_decay;
@@ -160,7 +161,6 @@ struct ParticleLifespan {
     float t;
 };
 
-// Enemy components
 struct Enemy { };
 
 struct Direction {
@@ -174,10 +174,8 @@ struct Health {
     float value;
 };
 
-// Bullet components
 struct Bullet { };
 
-// Turret components
 struct Turret { 
     Turret(float fire_interval_arg = 1.0) {
         lr = 1;
@@ -193,8 +191,6 @@ struct Turret {
     flecs::entity beam;
     int lr;
 };
-
-struct Cannon { };
 
 struct Railgun { };
 
@@ -214,7 +210,6 @@ struct Target {
     bool lock;
 };
 
-// Camera components
 struct CameraController {
     CameraController(float ar = 0, float av = 0, float av_h = 0, 
         float ah = CameraHeight, float ad = CameraDistance, float as = 0)
@@ -369,7 +364,6 @@ float decelerate_camera(float v, float delta_time, float max_speed) {
     return glm_clamp(v, -max_speed, max_speed);
 }
 
-// Move camera around with keyboard
 void MoveCamera(flecs::iter& it, CameraController *ctrl) {
     auto input = it.column<const Input>(2);
     auto camera = it.column<graphics::Camera>(3);
@@ -422,7 +416,6 @@ void MoveCamera(flecs::iter& it, CameraController *ctrl) {
     }
 }
 
-// Periodically spawn new enemies
 void SpawnEnemy(flecs::iter& it) {
     auto g = it.column<const Game>(1);
     const Level* lvl = g->level.get<Level>();
@@ -434,7 +427,6 @@ void SpawnEnemy(flecs::iter& it) {
         });
 }
 
-// Progress enemies along path
 void MoveEnemy(flecs::iter& it, Position* p, Direction* d) {
     auto g = it.column<const Game>(3);
     const Level* lvl = g->level.get<Level>();
@@ -449,7 +441,6 @@ void MoveEnemy(flecs::iter& it, Position* p, Direction* d) {
     }
 }
 
-// Clear target if it has been destroyed or if it is out of range
 void ClearTarget(flecs::iter& it, Target* target, Position* p) {
     for (auto i : it) {
         auto t = target[i].target;
@@ -458,12 +449,7 @@ void ClearTarget(flecs::iter& it, Target* target, Position* p) {
                 target[i].target = flecs::entity::null();
                 target[i].lock = false;
             } else {
-                const Position *tp = t.get<Position>(); // TODO: look into lifecycle issue
-                if (!tp) {
-                    continue;
-                }
-
-                Position target_pos = *tp;
+                Position target_pos = t.get<Position>()[0];
                 float distance = glm_vec3_distance(p[i], target_pos);
                 if (distance > TurretRange) {
                     target[i].target = flecs::entity::null();
@@ -474,10 +460,9 @@ void ClearTarget(flecs::iter& it, Target* target, Position* p) {
     }
 }
 
-// Find target for turret
-void FindTarget(flecs::iter& it, Target* target, Position* p) {
-    auto q = it.column<const SpatialQuery>(3);
-    auto qr = it.column<SpatialQueryResult>(4);
+void FindTarget(flecs::iter& it, Turret* turret, Target* target, Position* p) {
+    auto q = it.column<const SpatialQuery>(4);
+    auto qr = it.column<SpatialQueryResult>(5);
 
     for (auto i : it) {
         if (target[i].target) {
@@ -489,29 +474,28 @@ void FindTarget(flecs::iter& it, Target* target, Position* p) {
         q->query.findn(p[i], TurretRange, qr[i].results);
         for (auto e : qr[i].results) {
             distance = glm_vec3_distance(p[i], e.pos);
+            if (distance > TurretRange) {
+                continue;
+            }
+
             if (!min_distance || distance < min_distance) {
                 min_distance = distance;
                 enemy = flecs::entity(it.world(), e.e);
             }
         }
-        if (min_distance < TurretRange) {
+
+        if (min_distance) {
             target[i].target = enemy;
             target[i].distance = min_distance;
         }
     }
 }
 
-// Aim turret at target
 void AimTarget(flecs::iter& it, Turret* turret, Target* target, Position* p) {
     for (auto i : it) {
         flecs::entity enemy = target[i].target;
         if (enemy && enemy.is_alive()) {
-            const Position *tp = enemy.get<Position>();
-            if (!tp) {
-                continue;
-            }
-
-            Position target_p = *tp;
+            Position target_p = enemy.get<Position>()[0];
             vec3 diff;
             glm_vec3_sub(target_p, target[i].prev_position, diff);
 
@@ -539,7 +523,6 @@ void AimTarget(flecs::iter& it, Turret* turret, Target* target, Position* p) {
     }
 }
 
-// Countdown until next fire
 void FireCountdown(flecs::iter& it, Turret *turret, Target *target) {
     for (auto i : it) {
         turret[i].t_since_fire += it.delta_time();
@@ -547,12 +530,15 @@ void FireCountdown(flecs::iter& it, Turret *turret, Target *target) {
             turret[i].beam_countdown -= it.delta_time();
             if (turret[i].beam_countdown <= 0 || !target[i].lock) {
                 turret[i].beam.disable();
+                turret[i].t_since_fire = 0;
             }
         }
     }
 }
 
-void AimBeam(flecs::iter& it, Position *p, Turret *turret, Target *target) {
+void BeamControl(flecs::iter& it, Position *p, Turret *turret, Target *target) {
+    auto g = it.column<const Game>(4);
+
     for (auto i : it) {
         flecs::entity beam = turret[i].beam;
         if (target[i].lock && beam && beam.enabled()) {
@@ -561,32 +547,36 @@ void AimBeam(flecs::iter& it, Position *p, Turret *turret, Target *target) {
                 continue;
             }
 
+            // Position beam at enemy
             Position pos = p[i];
-            const Position *tp = enemy.get<Position>();
-            if (!tp) {
-                continue;
-            }
-
-            Position target_pos = *tp;
+            Position target_pos = enemy.get<Position>()[0];
             float distance = glm_vec3_distance(p[i], target_pos);
+            beam.set<Position>({ (distance / 2), 0.0, 0.0 });
+            beam.set<Box>({0.02, 0.02, distance});
 
-            beam.set<Position>({
-                pos.x = (distance / 2),
-                pos.y = 0.0,
-                pos.z = 0.0
-            });
-
-            beam.set<Box>({0.04, 0.04, distance});
-
+            // Subtract health from enemy as long as beam is firing
             Health *h = enemy.get_mut<Health>();
             h->value -= BeamDamage;
 
-            turret[i].t_since_fire = 0;
+            // Create ion trail
+            vec3 v;
+            glm_vec3_sub(pos, target_pos, v);
+            glm_vec3_normalize(v);
+            float ion_d = randf(distance);
+            Position ion_pos = {pos.x - ion_d * v[0], 0.6, pos.z - ion_d * v[2]};
+            Velocity ion_v = {
+                randf(0.001),
+                randf(0.001),
+                randf(0.001)
+            };
+            it.world().entity()
+                .add_instanceof(g->ion_prefab)
+                .set<Position>(ion_pos)
+                .set<Velocity>(ion_v);
         }
     }
 }
 
-// Fire bullets at target, alternate firing between cannons
 void FireAtTarget(flecs::iter& it, Turret* turret, Target* target, Position* p){
     auto ecs = it.world();
     auto g = it.column<const Game>(4);
@@ -615,33 +605,28 @@ void FireAtTarget(flecs::iter& it, Turret* turret, Target* target, Position* p){
                 pos.y = 0.6;
                 pos.z += cos(angle) * TurretCannonOffset * turret[i].lr;
                 turret[i].lr = -turret[i].lr;
-
                 ecs.entity().add_instanceof(g->bullet_prefab)
                     .set<Position>(pos)
                     .set<Velocity>({-v[0], 0, -v[2]});
                 ecs.entity().add_instanceof(g->fireball_prefab)
                     .set<Position>(pos)
                     .set<Rotation>({0, angle, 0});  
-                ecs.entity().add_instanceof(g->shell_prefab)
-                    .set<Position>(pos);   
-            } else {
+            } else if (turret[i].beam_countdown <= 0) {
                 turret[i].beam.enable();
-                turret[i].beam_countdown = 2.0;
+                turret[i].beam_countdown = 1.0;
                 pos.x += 0.6 * -v[0];
                 pos.y = 0.6;
                 pos.z += 0.6 * -v[2];
-
                 ecs.entity().add_instanceof(g->bolt_prefab)
                     .set<Position>(pos)
                     .set<Rotation>({0, angle, 0}); 
             }
 
-            turret[i].t_since_fire = 0;                      
+            turret[i].t_since_fire = 0;
         }
     }
 }
 
-// Progress particles
 void ProgressParticle(flecs::iter& it, ParticleLifespan *pl) {
     auto p = it.column<const Particle>(2);
     auto box = it.column<Box>(3);
@@ -677,20 +662,48 @@ void ProgressParticle(flecs::iter& it, ParticleLifespan *pl) {
     }
 }
 
+void HitTarget(flecs::iter& it, Position* p, Health* h) {
+    auto ecs = it.world();
+    auto b = it.column<const Box>(3);
+    auto q = it.column<const SpatialQuery>(4);
+    auto qr = it.column<SpatialQueryResult>(5);
+    auto g = it.column<Game>(6);
+
+    for (int i : it) {
+        float range;
+        if (it.is_owned(3)) {
+            range = b[i].width / 2;
+        } else {
+            range = b->width / 2;
+        }
+
+        q->query.findn(p[i], range, qr[i].results);
+        for (auto e : qr[i].results) {
+            auto bullet = ecs.entity(e.e);
+            bullet.destruct();
+            h[i].value -= BulletDamage;
+
+            ecs.entity()
+                .add_childof(it.entity(i))
+                .add_instanceof(g->spark_prefab)
+                .set<Box>({0.1, 0.1, 0.1})
+                .set<Position>({randf(EnemySize) - EnemySize / 2, randf(EnemySize) - EnemySize / 2, randf(EnemySize) - EnemySize / 2});
+        }
+    }
+}
+
 static
-void add_explosion(flecs::world& ecs, const Game& g, Position& p) {
+void explode(flecs::world& ecs, const Game& g, Position& p) {
     for (int s = 0; s < 25; s ++) {
         float red = randf(0.4) + 0.6;
         float green = randf(0.3);
         float size = SmokeSize * randf(1.0);
         float radius = 0.5;
-
         if (green > red) {
             green = red;
         }
 
-        ecs.entity()
-            .add_instanceof(g.smoke_prefab)
+        ecs.entity().add_instanceof(g.smoke_prefab)
             .set<Position>({
                 p.x + randf(radius) - radius / 2, 
                 p.y + randf(radius) - radius / 2,  
@@ -716,31 +729,7 @@ void shake_camera(
 {
     float d = glm_vec3_distance((float*)cam.position, p);
     if (d < 8.0) {
-        ctrl.shake = 0.5 / d;
-    }
-}
-
-// Check if enemy has been hit by a bullet
-void HitTarget(flecs::iter& it, Position* p, Health* h) {
-    auto ecs = it.world();
-    auto b = it.column<const Box>(3);
-    auto q = it.column<const SpatialQuery>(4);
-    auto qr = it.column<SpatialQueryResult>(5);
-
-    for (int i : it) {
-        float range;
-        if (it.is_owned(3)) {
-            range = b[i].width / 2;
-        } else {
-            range = b->width / 2;
-        }
-
-        q->query.findn(p[i], range, qr[i].results);
-        for (auto e : qr[i].results) {
-            auto bullet = ecs.entity(e.e);
-            bullet.destruct();
-            h[i].value -= BulletDamage;
-        }
+        ctrl.shake = 0.2 / d;
     }
 }
 
@@ -753,22 +742,20 @@ void DestroyEnemy(flecs::iter& it, Health *h, Position *p) {
     for (auto i : it) {
         if (h[i].value <= 0) {
             it.entity(i).destruct();
-            add_explosion(ecs, g[0], p[i]);
+            explode(ecs, g[0], p[i]);
             shake_camera(cam[0], cam_ctrl[0], p[i]);
         }
     }
 }
 
-// Update enemy color based on health
 void UpdateEnemyColor(flecs::iter& it, Color* c, Health* h) {
     for (auto i : it) {
-        c[i].value.r = h[i].value;
-        c[i].value.g = 0.1 + h[i].value / 5;
-        c[i].value.b = 0.1 + h[i].value / 5;
+        c[i].value.r = (1.0 - h[i].value) / 2;
+        c[i].value.g = (1.0 - h[i].value) / 5;
+        c[i].value.b = (1.0 - h[i].value) / 7;
     }
 }
 
-// Init Game
 flecs::entity init_game(flecs::world& ecs) {
     auto game = ecs.entity("Game");
     Game *g = game.get_mut<Game>();
@@ -777,7 +764,6 @@ flecs::entity init_game(flecs::world& ecs) {
     return game;
 }
 
-// Init UI
 void init_ui(flecs::world& ecs, flecs::entity game) {
     graphics::Camera camera_data;
     camera_data.set_position(0, CameraHeight, 0);
@@ -787,25 +773,23 @@ void init_ui(flecs::world& ecs, flecs::entity game) {
         .set<CameraController>({-GLM_PI / 2, 0});
 
     graphics::DirectionalLight light_data;
-    light_data.set_position(0, 0, 0);
-    light_data.set_direction(0.6, 1.0, 0.4);
-    light_data.set_color(0.4, 0.4, 0.37);
+    light_data.set_direction(0.6, 0.4, 0.4);
+    light_data.set_color(0.95, 0.90, 0.75);
     auto light = ecs.entity("Sun")
         .set<graphics::DirectionalLight>(light_data);
 
     gui::Window window_data;
-    window_data.width = 1024;
-    window_data.height = 800;
+    window_data.width = 1600;
+    window_data.height = 1000;
     window_data.title = "Flecs Tower Defense";
     auto window = ecs.entity().set<gui::Window>(window_data);
 
     gui::Canvas canvas_data;
-    canvas_data.background_color = {0.05, 0.07, 0.1};
-    canvas_data.ambient_light = {0.3, 0.3, 0.43};
+    canvas_data.background_color = {0.60, 0.65, 0.8};
+    canvas_data.ambient_light = {0.5, 0.5, 0.63};
     canvas_data.camera = camera.id();
     canvas_data.directional_light = light.id();
     window.set<gui::Canvas>(canvas_data);
-
     game.patch<Game>([window](Game& g) {
         g.window = window;
     });
@@ -836,32 +820,28 @@ void init_level(flecs::world& ecs, flecs::entity game) {
         to_z(TileCountZ - 1)
     };
 
-    g->level = ecs.entity()
-        .set<Level>({path, spawn_point});
+    g->level = ecs.entity().set<Level>({path, spawn_point});
 
     for (int x = 0; x < TileCountX; x ++) {
         for (int z = 0; z < TileCountZ; z++) {
             float xc = to_x(x);
             float zc = to_z(z);
 
-            auto t = ecs.entity();
+            auto t = ecs.entity().set<Position>({xc, 0, zc});
             if (path[0](x, z)) {
                 t.add_instanceof(g->path_prefab);
             } else {
                 t.add_instanceof(g->tile_prefab);
 
+                auto e = ecs.entity().set<Position>({xc, TileHeight / 2, zc});
                 if (randf(1) > 0.3) {
-                    ecs.entity().add_instanceof(g->cannon_prefab)
-                        .set<Position>({xc, TileHeight / 2, zc});
+                    e.add_instanceof(g->cannon_prefab);
                 } else {
-                    ecs.entity().add_instanceof(g->railgun_prefab)
-                        .set<Position>({xc, TileHeight / 2, zc});
+                    e.add_instanceof(g->railgun_prefab);
                 }
-            }
-
-            t.set<Position>({xc, 0, zc});                
+            }           
         }
-    }                                               
+    }                                  
 }
 
 // Init prefabs
@@ -869,12 +849,13 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
     Game *g = game.get_mut<Game>();
 
     g->tile_prefab = ecs.prefab()
-        .set<Color>({0.2, 0.2, 0.2})
+        .set<Color>({0.4, 0.6, 0.3})
+        .set<Specular>({0.25, 20})
         .set<Box>({TileSize, TileHeight, TileSize});
 
     g->path_prefab = ecs.prefab()
-        .set<Color>({0.3, 0.3, 0.3})
-        .set<Specular>({0.25, 20})
+        .set<Color>({0.2, 0.2, 0.2})
+        .set<Specular>({0.5, 50})
         .set<Box>({TileSize + TileSpacing, PathHeight, TileSize + TileSpacing});
 
     auto bullet_query_trait = ecs.type()
@@ -882,91 +863,85 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
 
     g->enemy_prefab = ecs.prefab()
         .add<Enemy>()
-        .add<Health>()
-        .set<Color>({1.0, 0.3, 0.3})
+        .add<Health>().add_owned<Health>()
+        .set<Color>({0.1, 0.0, 0.18}).add_owned<Color>()
+        .set<Emissive>({0.3})
         .set<Box>({EnemySize, EnemySize, EnemySize})
-        .set<Specular>({2.0, 150})
+        .set<Specular>({4.0, 512})
         .set_trait<SpatialQuery, Bullet>({
             flecs::squery(ecs, "ANY:Bullet", g->center, g->size)
         })
         .add_trait<SpatialQueryResult, Bullet>()
-        .add_owned<Color>()
-        .add_owned<Health>()
         .add_owned(bullet_query_trait);
 
-    g->bullet_prefab = ecs.prefab("BulletPrefab")
+    auto particle = ecs.prefab()
+        .add_owned<ParticleLifespan>()
+        .add_owned<Color>()
+        .add_owned<Box>();
+
+    g->bullet_prefab = ecs.prefab("BulletPrefab").add_instanceof(particle)
         .add<Bullet>()
         .set<Color>({0, 0, 0})
         .set<Box>({BulletSize, BulletSize, BulletSize})
         .set<Particle>({
             1.0, 1.0, 1.0, BulletLifespan
-        })
-        .add_owned<ParticleLifespan>();
+        });
 
-    g->beam_prefab = ecs.prefab("RailBulletPrefab")
-        .add<Bullet>()
-        .set<Color>({0.3, 0.6, 1})
-        .set<Emissive>({2})
-        .set<Box>({BulletSize, BulletSize, BulletSize})
-        .add_owned<Box>();
-
-    g->shell_prefab = ecs.prefab("ShellPrefab")
-        .set<Color>({0, 0, 0})
-        .set<Box>({ShellSize, ShellSize, ShellSize})
-        .set<Particle>({
-            1.0, 1.0, 1.0, ShellLifespan
-        })
-        .set<Velocity>({0, -ShellSpeed, 0.0})
-        .add_owned<Box>()
-        .add_owned<Color>()
-        .add_owned<ParticleLifespan>()
-        .add_owned<Velocity>();
-
-    g->fireball_prefab = ecs.prefab("FireballPrefab")
+    g->fireball_prefab = ecs.prefab("FireballPrefab").add_instanceof(particle)
         .set<Color>({1.0, 1.0, 0.5})
         .set<Emissive>({1.6})
         .set<Box>({FireballSize, FireballSize, FireballSize})
         .set<Particle>({
             FireballSizeDecay, 1.0, 1.0, FireballLifespan
-        })
-        .add_owned<Color>()
-        .add_owned<Box>()
-        .add_owned<ParticleLifespan>();
+        });
 
-    g->bolt_prefab = ecs.prefab("BoltPrefab")
-        .set<Color>({0.3, 0.6, 1.0})
-        .set<Emissive>({3})
-        .set<Box>({BoltSize, BoltSize, BoltSize})
-        .set<Particle>({
-            BoltSizeDecay, 1.0, 1.0, BoltLifespan
-        })
-        .add_owned<Color>()
-        .add_owned<Box>()
-        .add_owned<ParticleLifespan>();
-
-    g->smoke_prefab = ecs.prefab("SmokePrefab")
+    g->smoke_prefab = ecs.prefab("SmokePrefab").add_instanceof(particle)
         .set<Color>({0, 0, 0})
-        .set<Emissive>({8.0})
+        .set<Emissive>({9.0})
         .set<Box>({SmokeSize, SmokeSize, SmokeSize})
         .set<Particle>({
             SmokeSizeDecay, SmokeColorDecay, 1.0, SmokeLifespan
         })
         .set<Velocity>({0, 0.003, 0})
-        .add_owned<Color>()
-        .add_owned<Box>()
-        .add_owned<Velocity>()
-        .add_owned<ParticleLifespan>();
+        .add_owned<Velocity>();
 
-    g->spark_prefab = ecs.prefab("SparkPrefab")
+    g->spark_prefab = ecs.prefab("SparkPrefab").add_instanceof(particle)
         .set<Color>({1.0, 0.5, 0.5})
         .set<Emissive>({2.0})
         .set<Box>({SparkSize, SparkSize, SparkSize})
         .set<Particle>({
             SparkSizeDecay, 1.0, SparkVelocityDecay, SparkLifespan
-        })
-        .add_owned<Color>()
-        .add_owned<Box>()
-        .add_owned<ParticleLifespan>();         
+        });
+
+    auto beam_material = ecs.prefab("BeamMaterial")
+        .set<Color>({0.35, 0.5, 1})
+        .set<Emissive>({2});
+
+    g->ion_prefab = ecs.prefab("IonPrefab").add_instanceof(particle)
+        .add_instanceof(beam_material)
+        .set<Box>({IonSize, IonSize, IonSize})
+        .set<Particle>({
+            IonDecay, 1.0, 1.0, IonLifespan
+        });
+
+    g->bolt_prefab = ecs.prefab("BoltPrefab").add_instanceof(particle)
+        .add_instanceof(beam_material)
+        .set<Box>({BoltSize, BoltSize, BoltSize})
+        .set<Particle>({
+            BoltSizeDecay, 1.0, 1.0, BoltLifespan
+        });   
+
+    auto metal_material = ecs.prefab("MetalMaterial")
+        .set<Color>({0.1, 0.1, 0.1})
+        .set<Specular>({1.5, 128});
+
+    auto cannon_head_material = ecs.prefab("CannonHeadMaterial")
+        .set<Color>({0.35, 0.4, 0.3})
+        .set<Specular>({0.5, 25});
+
+    auto railgun_light_material = ecs.prefab("RailgunLightMaterial")
+        .set<Color>({0.1, 0.3, 1.0})
+        .set<Emissive>({2.0});
 
     auto enemy_query_trait = ecs.type()
         .add_trait<SpatialQueryResult, Enemy>();
@@ -977,29 +952,25 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
         })
         .add_trait<SpatialQueryResult, Enemy>()
         .add_owned<Target>()
-        .add_owned(enemy_query_trait);
-
-    g->cannon_prefab = ecs.prefab()
-        .add_instanceof(turret_prefab)
-        .add<Cannon>()
-        .set<Turret>({0.05})
+        .add_owned(enemy_query_trait)
         .add_owned<Turret>();
 
-        ecs.prefab()
-            .add_childof(g->cannon_prefab)
-            .set<Color>({0.1, 0.1, 0.1})
-            .set<Box>({0.3, 0.1, 0.3})
-            .set<Position>({0, 0.05, 0});
+        auto turret_base = ecs.prefab()
+            .set<Position>({0, 0, 0})
+            .add_childof(turret_prefab);
 
-        ecs.prefab()
-            .add_childof(g->cannon_prefab)
-            .set<Color>({0.15, 0.15, 0.15})
-            .set<Box>({0.2, 0.3, 0.2})
-            .set<Position>({0, 0.15, 0});
+            ecs.prefab().add_instanceof(metal_material)
+                .add_childof(turret_base)
+                .set<Box>({0.3, 0.1, 0.3})
+                .set<Position>({0, 0.05, 0});
 
-        auto cannon_head_material = ecs.prefab("CannonHeadMaterial")
-            .set<Color>({0.35, 0.4, 0.3})
-            .set<Specular>({0.5, 25});
+            ecs.prefab().add_instanceof(metal_material)
+                .add_childof(turret_base)
+                .set<Box>({0.2, 0.3, 0.2})
+                .set<Position>({0, 0.15, 0});
+
+    g->cannon_prefab = ecs.prefab().add_instanceof(turret_prefab)
+        .set<Turret>({TurretFireInterval});
 
         auto cannon_head = ecs.prefab("TurretHead")
             .add_childof(g->cannon_prefab)
@@ -1008,10 +979,8 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
             .set<Position>({0, 0.4, 0})
             .set<Rotation>({0, 0.0, 0});
 
-            auto cannon = ecs.prefab("Cannon")
-                .set<Color>({0.1, 0.1, 0.1})
-                .set<Box>({0.4, 0.07, 0.07})
-                .set<Specular>({2, 75});
+            auto cannon = ecs.prefab("Cannon").add_instanceof(metal_material)
+                .set<Box>({0.4, 0.07, 0.07});
 
             ecs.prefab("CannonLeft").add_instanceof(cannon)
                 .add_childof(cannon_head)
@@ -1021,68 +990,46 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
                 .add_childof(cannon_head)
                 .set<Position>({TurretCannonLength, 0.0, TurretCannonOffset});                         
 
-    g->railgun_prefab = ecs.prefab()
-        .add_instanceof(turret_prefab)
+    g->railgun_prefab = ecs.prefab().add_instanceof(turret_prefab)
         .add<Railgun>()
-        .set<Turret>({1.0})
-        .add_owned<Turret>();        
-
-        ecs.prefab()
-            .add_childof(g->railgun_prefab)
-            .set<Color>({0.1, 0.1, 0.1})
-            .set<Box>({0.3, 0.3, 0.3})
-            .set<Position>({0, 0.15, 0});
-
-        auto railgun_head_material = ecs.prefab("RailgunHeadMaterial")
-            .set<Color>({0.1, 0.1, 0.1})
-            .set<Specular>({1.5, 128});
-
-        auto railgun_glow_material = ecs.prefab("RailgunGlowMaterial")
-            .set<Color>({0.1, 0.3, 1.0})
-            .set<Emissive>({3.8});
+        .set<Turret>({BeamFireInterval});    
 
         auto railgun_head = ecs.prefab("TurretHead")
             .add_childof(g->railgun_prefab)
             .set<Position>({0.0, 0.4, 0})
             .set<Rotation>({0, 0.0, 0});
 
-            ecs.prefab()
+            ecs.prefab().add_instanceof(metal_material)
                 .add_childof(railgun_head)
-                .add_instanceof(railgun_head_material)
                 .set<Box>({0.45, 0.15, 0.08})
                 .set<Position>({0.05, 0.0, -0.15});
                 
-            ecs.prefab()
+            ecs.prefab().add_instanceof(metal_material)
                 .add_childof(railgun_head)
-                .add_instanceof(railgun_head_material)
                 .set<Box>({0.45, 0.15, 0.08})
                 .set<Position>({0.05, 0.0, 0.15});                
 
-            ecs.prefab()
+            ecs.prefab().add_instanceof(railgun_light_material)
                 .add_childof(railgun_head)
-                .add_instanceof(railgun_glow_material)
                 .set<Box>({0.4, 0.1, 0.05})
                 .set<Position>({0.05, 0.0, -0.10});
 
-            ecs.prefab()
+            ecs.prefab().add_instanceof(railgun_light_material)
                 .add_childof(railgun_head)
-                .add_instanceof(railgun_glow_material)
                 .set<Box>({0.4, 0.1, 0.05})
                 .set<Position>({0.05, 0.0, 0.10});
 
-            ecs.prefab()
+            ecs.prefab().add_instanceof(metal_material)
                 .add_childof(railgun_head)
-                .add_instanceof(railgun_head_material)
                 .set<Box>({0.8, 0.25, 0.15})
                 .set<Position>({0.12, 0, 0.0});  
 
-            ecs.prefab("TurretBeam").add_instanceof(g->beam_prefab)
+            ecs.prefab("TurretBeam").add_instanceof(beam_material)
                 .add_childof(railgun_head)
                 .set<Position>({1, 0, 0})
-                .set<Box>({0.04, 0.04, 2.0})
+                .set<Box>({BeamSize, BeamSize, BeamSize}).add_owned<Box>()
                 .set<Rotation>({0,(float)GLM_PI / 2.0f, 0});
 
-    // When Turret is set, initialize it with the head child
     ecs.system<Turret>()
         .kind(flecs::OnSet)
         .each([](flecs::entity e, Turret& t) {
@@ -1118,7 +1065,7 @@ void init_systems(flecs::world& ecs) {
         .iter(ClearTarget);
 
     // Find target for turrets
-    ecs.system<Target, Position>(
+    ecs.system<Turret, Target, Position>(
         "FindTarget", "SHARED:SpatialQuery FOR Enemy, SpatialQueryResult FOR Enemy")
         .iter(FindTarget);
 
@@ -1134,13 +1081,12 @@ void init_systems(flecs::world& ecs) {
 
     // Aim beam at target
     ecs.system<Position, Turret, Target>(
-        "AimBeam")
-        .iter(AimBeam);
+        "BeamControl", "Game:Game")
+        .iter(BeamControl);
 
     // Fire bullets at enemies
     ecs.system<Turret, Target, Position>(
         "FireAtTarget", "Game:Game")
-        .interval(TurretFireInterval)
         .iter(FireAtTarget);
 
     ecs.system<ParticleLifespan>(
@@ -1150,7 +1096,7 @@ void init_systems(flecs::world& ecs) {
     // Test for collisions with enemies
     ecs.system<Position, Health>(
         "HitTarget", 
-        "ANY:Box, SHARED:SpatialQuery FOR Bullet,SpatialQueryResult FOR Bullet")
+        "ANY:Box, SHARED:SpatialQuery FOR Bullet,SpatialQueryResult FOR Bullet, Game:Game")
         .iter(HitTarget);
 
     ecs.system<Health, Position>(
@@ -1194,13 +1140,5 @@ int main(int argc, char *argv[]) {
 
     ecs.set_target_fps(60);
 
-    int i = 0;
-    ecs_time_t t;
-    ecs_time_measure(&t);
-    while(ecs.progress()) { 
-        i ++;
-        if (!(i % 60)) {
-            printf("t = %f\n", ecs_time_measure(&t) / 60);
-        }
-    }
+    while(ecs.progress()) { }
 }
