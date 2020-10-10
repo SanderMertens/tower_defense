@@ -10,7 +10,7 @@ using Velocity = physics::Velocity3;
 using Input = input::Input;
 using SpatialQuery = flecs::systems::physics::SpatialQuery;
 using SpatialQueryResult = flecs::systems::physics::SpatialQueryResult;
-using Color = graphics::Color;
+using Color = graphics::Rgb;
 using Specular = graphics::Specular;
 using Emissive = graphics::Emissive;
 using Box = geometry::Box;
@@ -114,6 +114,7 @@ private:
 // Components
 
 struct Game {
+    flecs::entity tree_prefab;
     flecs::entity tile_prefab;
     flecs::entity path_prefab;
     flecs::entity enemy_prefab;
@@ -667,7 +668,7 @@ void HitTarget(flecs::iter& it, Position* p, Health* h) {
     auto b = it.column<const Box>(3);
     auto q = it.column<const SpatialQuery>(4);
     auto qr = it.column<SpatialQueryResult>(5);
-    auto g = it.column<Game>(6);
+    auto g = it.column<const Game>(6);
 
     for (int i : it) {
         float range;
@@ -682,12 +683,6 @@ void HitTarget(flecs::iter& it, Position* p, Health* h) {
             auto bullet = ecs.entity(e.e);
             bullet.destruct();
             h[i].value -= BulletDamage;
-
-            ecs.entity()
-                .add_childof(it.entity(i))
-                .add_instanceof(g->spark_prefab)
-                .set<Box>({0.1, 0.1, 0.1})
-                .set<Position>({randf(EnemySize) - EnemySize / 2, randf(EnemySize) - EnemySize / 2, randf(EnemySize) - EnemySize / 2});
         }
     }
 }
@@ -756,15 +751,13 @@ void UpdateEnemyColor(flecs::iter& it, Color* c, Health* h) {
     }
 }
 
-flecs::entity init_game(flecs::world& ecs) {
-    auto game = ecs.entity("Game");
-    Game *g = game.get_mut<Game>();
+void init_game(flecs::world& ecs) {
+    Game *g = ecs.get_mut<Game>();
     g->center = (Position){ to_x(TileCountX / 2), 0, to_z(TileCountZ / 2) };
     g->size = TileCountX * (TileSize + TileSpacing) + 2;
-    return game;
 }
 
-void init_ui(flecs::world& ecs, flecs::entity game) {
+void init_ui(flecs::world& ecs) {
     graphics::Camera camera_data;
     camera_data.set_position(0, CameraHeight, 0);
     camera_data.set_lookat(0, 0, to_z(TileCountZ / 2));
@@ -779,8 +772,8 @@ void init_ui(flecs::world& ecs, flecs::entity game) {
         .set<graphics::DirectionalLight>(light_data);
 
     gui::Window window_data;
-    window_data.width = 1600;
-    window_data.height = 1000;
+    window_data.width = 1024;
+    window_data.height = 800;
     window_data.title = "Flecs Tower Defense";
     auto window = ecs.entity().set<gui::Window>(window_data);
 
@@ -790,14 +783,14 @@ void init_ui(flecs::world& ecs, flecs::entity game) {
     canvas_data.camera = camera.id();
     canvas_data.directional_light = light.id();
     window.set<gui::Canvas>(canvas_data);
-    game.patch<Game>([window](Game& g) {
+    ecs.patch<Game>([window](Game& g) {
         g.window = window;
     });
 }
 
 // Init level
-void init_level(flecs::world& ecs, flecs::entity game) {
-    Game *g = game.get_mut<Game>();
+void init_level(flecs::world& ecs) {
+    Game *g = ecs.get_mut<Game>();
 
     grid<bool> *path = new grid<bool>(TileCountX, TileCountZ);
     path->set(0, 1, true); path->set(1, 1, true); path->set(2, 1, true);
@@ -834,10 +827,14 @@ void init_level(flecs::world& ecs, flecs::entity game) {
                 t.add_instanceof(g->tile_prefab);
 
                 auto e = ecs.entity().set<Position>({xc, TileHeight / 2, zc});
-                if (randf(1) > 0.3) {
-                    e.add_instanceof(g->cannon_prefab);
+                if (randf(1) > 0.7) {
+                    e.add_instanceof(g->tree_prefab);
                 } else {
-                    e.add_instanceof(g->railgun_prefab);
+                    if (randf(1) > 0.3) {
+                        e.add_instanceof(g->cannon_prefab);
+                    } else {
+                        e.add_instanceof(g->railgun_prefab);
+                    }
                 }
             }           
         }
@@ -845,11 +842,25 @@ void init_level(flecs::world& ecs, flecs::entity game) {
 }
 
 // Init prefabs
-void init_prefabs(flecs::world& ecs, flecs::entity game) {
-    Game *g = game.get_mut<Game>();
+void init_prefabs(flecs::world& ecs) {
+    Game *g = ecs.get_mut<Game>();
+
+    g->tree_prefab = ecs.prefab();
+        ecs.prefab()
+            .add_childof(g->tree_prefab)
+            .set<Position>({0, 0.25, 0})
+            .set<Color>({0.25, 0.2, 0.1})
+            .set<Box>({0.4, 0.5, 0.4});
+        ecs.prefab()
+            .add_childof(g->tree_prefab)
+            .set<Position>({0, 0.9, 0})
+            .set<Color>({0.2, 0.3, 0.15})
+            .set<Box>({0.8, 0.8, 0.8})
+            .add_owned<Position>()
+            .add_owned<Box>();
 
     g->tile_prefab = ecs.prefab()
-        .set<Color>({0.4, 0.6, 0.3})
+        .set<Color>({0.3, 0.47, 0.22})
         .set<Specular>({0.25, 20})
         .set<Box>({TileSize, TileHeight, TileSize});
 
@@ -1045,7 +1056,7 @@ void init_prefabs(flecs::world& ecs, flecs::entity game) {
 void init_systems(flecs::world& ecs) {
     // Move camera with keyboard
     ecs.system<CameraController>(
-        "MoveCamera", "$:Input, Camera:flecs.components.graphics.Camera")
+        "MoveCamera", "$:Input, [inout] Camera:flecs.components.graphics.Camera")
         .iter(MoveCamera);
 
     // Spawn enemies periodically
@@ -1081,12 +1092,12 @@ void init_systems(flecs::world& ecs) {
 
     // Aim beam at target
     ecs.system<Position, Turret, Target>(
-        "BeamControl", "Game:Game")
+        "BeamControl", "$Game")
         .iter(BeamControl);
 
     // Fire bullets at enemies
     ecs.system<Turret, Target, Position>(
-        "FireAtTarget", "Game:Game")
+        "FireAtTarget", "$Game")
         .iter(FireAtTarget);
 
     ecs.system<ParticleLifespan>(
@@ -1096,12 +1107,12 @@ void init_systems(flecs::world& ecs) {
     // Test for collisions with enemies
     ecs.system<Position, Health>(
         "HitTarget", 
-        "ANY:Box, SHARED:SpatialQuery FOR Bullet,SpatialQueryResult FOR Bullet, Game:Game")
+        "ANY:Box, SHARED:SpatialQuery FOR Bullet,SpatialQueryResult FOR Bullet, $Game")
         .iter(HitTarget);
 
     ecs.system<Health, Position>(
         "DestroyEnemy", 
-        "Game:Game, Camera:flecs.components.graphics.Camera, Camera:CameraController, ANY:Enemy")
+        "$Game, Camera:flecs.components.graphics.Camera, [inout] Camera:CameraController, ANY:Enemy")
         .iter(DestroyEnemy);
 
     ecs.system<Color, Health>(
@@ -1129,13 +1140,13 @@ int main(int argc, char *argv[]) {
     ecs.use<Position>("Position");
     ecs.use<Rotation>("Rotation");
     ecs.use<Velocity>("Velocity");
-    ecs.use<Color>();
+    ecs.use<Color>("Color");
     ecs.use<Box>();
 
-    auto game = init_game(ecs);
-    init_ui(ecs, game);
-    init_prefabs(ecs, game);
-    init_level(ecs, game);
+    init_game(ecs);
+    init_ui(ecs);
+    init_prefabs(ecs);
+    init_level(ecs);
     init_systems(ecs);
 
     ecs.set_target_fps(60);
