@@ -38,33 +38,33 @@ static const float TurretCannonLength = 0.3;
 static const float BulletSize = 0.05;
 static const float BulletSpeed = 12.0;
 static const float BulletLifespan = 0.5;
-static const float BulletDamage = 0.015;
+static const float BulletDamage = 0.025;
 
 static const float IonSize = 0.03;
 static const float IonLifespan = 1.5;
-static const float IonDecay = 0.975;
+static const float IonDecay = 0.1;
 
 static const float BeamFireInterval = 0.1;
-static const float BeamDamage = 0.1;
+static const float BeamDamage = 2.0;
 static const float BeamSize = 0.05;
 
 static const float FireballSize = 0.15;
-static const float FireballSizeDecay = 0.8;
-static const float FireballLifespan = 0.1;
+static const float FireballSizeDecay = 0.0001;
+static const float FireballLifespan = 0.2;
 
 static const float BoltSize = 0.3;
-static const float BoltSizeDecay = 0.9;
+static const float BoltSizeDecay = 0.01;
 static const float BoltLifespan = 5.3;
 
-static const float SmokeSize = 0.4;
-static const float SmokeSizeDecay = 0.98;
-static const float SmokeColorDecay = 0.9;
-static const float SmokeLifespan = 5.0;
+static const float SmokeSize = 0.5;
+static const float SmokeSizeDecay = 0.4;
+static const float SmokeColorDecay = 0.01;
+static const float SmokeLifespan = 4.0;
 
-static const float SparkSize = 0.15;
+static const float SparkSize = 0.10;
 static const float SparkLifespan = 0.5;
-static const float SparkSizeDecay = 0.9;
-static const float SparkVelocityDecay = 0.9;
+static const float SparkSizeDecay = 0.05;
+static const float SparkVelocityDecay = 0.05;
 
 static const float TileSize = 1.5;
 static const float TileHeight = 0.4;
@@ -557,18 +557,19 @@ void BeamControl(flecs::iter& it, Position *p, Turret *turret, Target *target) {
 
             // Subtract health from enemy as long as beam is firing
             Health *h = enemy.get_mut<Health>();
-            h->value -= BeamDamage;
+            h->value -= BeamDamage * it.delta_time();
 
             // Create ion trail
             vec3 v;
             glm_vec3_sub(pos, target_pos, v);
             glm_vec3_normalize(v);
-            float ion_d = randf(distance);
+
+            float ion_d = randf(distance - 0.7) + 0.7;
             Position ion_pos = {pos.x - ion_d * v[0], 0.6, pos.z - ion_d * v[2]};
             Velocity ion_v = {
-                randf(0.001),
-                randf(0.001),
-                randf(0.001)
+                randf(0.05),
+                randf(0.05),
+                randf(0.05)
             };
             it.world().entity()
                 .add_instanceof(g->ion_prefab)
@@ -601,7 +602,7 @@ void FireAtTarget(flecs::iter& it, Turret* turret, Target* target, Position* p){
             if (!is_railgun) {
                 pos.x += 1.8 * TurretCannonLength * -v[0];
                 pos.z += 1.8 * TurretCannonLength * -v[2];
-                glm_vec3_scale(v, BulletSpeed * it.delta_time(), v);
+                glm_vec3_scale(v, BulletSpeed, v);
                 pos.x += sin(angle) * TurretCannonOffset * turret[i].lr;
                 pos.y = 0.6;
                 pos.z += cos(angle) * TurretCannonOffset * turret[i].lr;
@@ -636,23 +637,23 @@ void ProgressParticle(flecs::iter& it, ParticleLifespan *pl) {
 
     if (box.is_set()) {
         for (auto i : it) {
-            box[i].width *= p->size_decay;
-            box[i].height *= p->size_decay;
-            box[i].depth *= p->size_decay;
+            box[i].width *= pow(p->size_decay, it.delta_time());
+            box[i].height *= pow(p->size_decay, it.delta_time());
+            box[i].depth *= pow(p->size_decay, it.delta_time());
         }
     }
     if (color.is_set()) {
         for (auto i : it) {
-            color[i].value.r *= p->color_decay;
-            color[i].value.g *= p->color_decay;
-            color[i].value.b *= p->color_decay;
+            color[i].value.r *= pow(p->color_decay, it.delta_time());
+            color[i].value.g *= pow(p->color_decay, it.delta_time());
+            color[i].value.b *= pow(p->color_decay, it.delta_time());
         }        
     }
     if (vel.is_set()) {
         for (auto i : it) {
-            vel[i].x *= p->velocity_decay;
-            vel[i].y *= p->velocity_decay;
-            vel[i].z *= p->velocity_decay;
+            vel[i].x *= pow(p->velocity_decay, it.delta_time());
+            vel[i].y *= pow(p->velocity_decay, it.delta_time());
+            vel[i].z *= pow(p->velocity_decay, it.delta_time());
         }          
     }
     for (auto i : it) {
@@ -690,12 +691,16 @@ void HitTarget(flecs::iter& it, Position* p, Health* h) {
 static
 void explode(flecs::world& ecs, const Game& g, Position& p) {
     for (int s = 0; s < 25; s ++) {
-        float red = randf(0.4) + 0.6;
-        float green = randf(0.3);
+        float red = randf(0.5) + 0.7;
+        float green = randf(0.5);
+        float blue = randf(0.3);
         float size = SmokeSize * randf(1.0);
-        float radius = 0.5;
+        float radius = 0.6;
         if (green > red) {
             green = red;
+        }
+        if (blue > green) {
+            blue = green;
         }
 
         ecs.entity().add_instanceof(g.smoke_prefab)
@@ -704,17 +709,17 @@ void explode(flecs::world& ecs, const Game& g, Position& p) {
                 p.y + randf(radius) - radius / 2,  
                 p.z + randf(radius) - radius / 2})
             .set<Box>({size, size, size})
-            .set<Color>({red, green, 0});
+            .set<Color>({red, green, blue});
     }
     for (int s = 0; s < 15; s ++) {
         float x_r = randf(ECS_PI_2);
         float y_r = randf(ECS_PI_2);
         float z_r = randf(ECS_PI_2);
-        float speed = randf(5) + 10;
+        float speed = randf(3.0) + 1.0;
         ecs.entity().add_instanceof(g.spark_prefab)
             .set<Position>({p.x, p.y, p.z}) 
             .set<Velocity>({
-                cos(x_r) / speed, cos(y_r) / speed, cos(z_r) / speed});
+                cos(x_r) * speed, cos(y_r) * speed, cos(z_r) * speed});
     }
 }
 
@@ -876,7 +881,6 @@ void init_prefabs(flecs::world& ecs) {
         .add<Enemy>()
         .add<Health>().add_owned<Health>()
         .set<Color>({0.1, 0.0, 0.18}).add_owned<Color>()
-        .set<Emissive>({0.3})
         .set<Box>({EnemySize, EnemySize, EnemySize})
         .set<Specular>({4.0, 512})
         .set_trait<SpatialQuery, Bullet>({
@@ -899,8 +903,8 @@ void init_prefabs(flecs::world& ecs) {
         });
 
     g->fireball_prefab = ecs.prefab("FireballPrefab").add_instanceof(particle)
-        .set<Color>({1.0, 1.0, 0.5})
-        .set<Emissive>({1.6})
+        .set<Color>({1.0, 0.5, 0.3})
+        .set<Emissive>({3.0})
         .set<Box>({FireballSize, FireballSize, FireballSize})
         .set<Particle>({
             FireballSizeDecay, 1.0, 1.0, FireballLifespan
@@ -908,12 +912,12 @@ void init_prefabs(flecs::world& ecs) {
 
     g->smoke_prefab = ecs.prefab("SmokePrefab").add_instanceof(particle)
         .set<Color>({0, 0, 0})
-        .set<Emissive>({9.0})
+        .set<Emissive>({4.0})
         .set<Box>({SmokeSize, SmokeSize, SmokeSize})
         .set<Particle>({
             SmokeSizeDecay, SmokeColorDecay, 1.0, SmokeLifespan
         })
-        .set<Velocity>({0, 0.003, 0})
+        .set<Velocity>({0, 0.3, 0})
         .add_owned<Velocity>();
 
     g->spark_prefab = ecs.prefab("SparkPrefab").add_instanceof(particle)
@@ -925,8 +929,8 @@ void init_prefabs(flecs::world& ecs) {
         });
 
     auto beam_material = ecs.prefab("BeamMaterial")
-        .set<Color>({0.35, 0.5, 1})
-        .set<Emissive>({2});
+        .set<Color>({0.1, 0.4, 1})
+        .set<Emissive>({6});
 
     g->ion_prefab = ecs.prefab("IonPrefab").add_instanceof(particle)
         .add_instanceof(beam_material)
@@ -1035,6 +1039,11 @@ void init_prefabs(flecs::world& ecs) {
                 .set<Box>({0.8, 0.25, 0.15})
                 .set<Position>({0.12, 0, 0.0});  
 
+            ecs.prefab().add_instanceof(metal_material)
+                .add_childof(railgun_head)
+                .set<Box>({0.5, 0.08, 0.08})
+                .set<Position>({0.4, 0.05, 0.0});                  
+
             ecs.prefab("TurretBeam").add_instanceof(beam_material)
                 .add_childof(railgun_head)
                 .set<Position>({1, 0, 0})
@@ -1056,7 +1065,7 @@ void init_prefabs(flecs::world& ecs) {
 void init_systems(flecs::world& ecs) {
     // Move camera with keyboard
     ecs.system<CameraController>(
-        "MoveCamera", "$:Input, [inout] Camera:flecs.components.graphics.Camera")
+        "MoveCamera", "$Input, [inout] Camera:flecs.components.graphics.Camera")
         .iter(MoveCamera);
 
     // Spawn enemies periodically
@@ -1107,7 +1116,7 @@ void init_systems(flecs::world& ecs) {
     // Test for collisions with enemies
     ecs.system<Position, Health>(
         "HitTarget", 
-        "ANY:Box, SHARED:SpatialQuery FOR Bullet,SpatialQueryResult FOR Bullet, $Game")
+        "ANY:Box, SHARED:SpatialQuery FOR Bullet, SpatialQueryResult FOR Bullet, $Game")
         .iter(HitTarget);
 
     ecs.system<Health, Position>(
