@@ -15,8 +15,13 @@
             "flecs.components.physics",
             "flecs.systems.transform",
             "flecs.systems.physics",
-            "flecs.systems.sdl2",
-            "flecs.systems.sokol"
-        ]
+            "flecs.systems.sdl2"
+        ],
+        "use-bundle": ["flecs.hub:default"]
+    },
+    "bundle": {
+        "repositories": {
+            "flecs.hub": "https://github.com/flecs-hub/flecs-hub"
+        }
     }
 }
