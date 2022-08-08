@@ -859,7 +859,7 @@ void init_prefabs(flecs::world& ecs) {
         .set<Particle>({
             SmokeSizeDecay, SmokeColorDecay, 1.0, SmokeLifespan
         })
-        .set<Velocity>({0, 0.3, 0})
+        .set<Velocity>({0, -0.3, 0})
         .override<Velocity>();
 
     ecs.prefab<prefabs::Spark>().is_a<prefabs::Particle>()
