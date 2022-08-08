@@ -32,14 +32,14 @@ static const float TurretCannonLength = 0.6;
 static const float BulletSize = 0.1;
 static const float BulletSpeed = 24.0;
 static const float BulletLifespan = 0.5;
-static const float BulletDamage = 0.0075;
+static const float BulletDamage = 0.005;
 
 static const float IonSize = 0.07;
 static const float IonLifespan = 1.5;
 static const float IonDecay = 0.1;
 
 static const float BeamFireInterval = 0.1;
-static const float BeamDamage = 0.5;
+static const float BeamDamage = 0.4;
 static const float BeamSize = 0.2;
 
 static const float FireballSize = 0.3;
@@ -51,16 +51,18 @@ static const float BoltSizeDecay = 0.01;
 static const float BoltLifespan = 5.3;
 
 static const float SmokeSize = 1.5;
-static const float SmokeRadius = 1.2;
+static const float ExplodeRadius = 1.2;
 static const float SmokeSizeDecay = 0.4;
 static const float SmokeColorDecay = 0.01;
 static const float SmokeLifespan = 4.0;
+static const int SmokeParticleCount = 50;
 
-static const float SparkSize = 0.20;
-static const float SparkLifespan = 0.5;
+static const float SparkSize = 0.15;
+static const float SparkLifespan = 0.8;
 static const float SparkSizeDecay = 0.05;
-static const float SparkVelocityDecay = 0.05;
-static const float SparkInitialVelocity = 6.0;
+static const float SparkVelocityDecay = 0.08;
+static const float SparkInitialVelocity = 8.0;
+static const int SparkParticleCount = 200;
 
 static const float TileSize = 3.0;
 static const float TileHeight = 0.5;
@@ -636,10 +638,10 @@ void HitTarget(flecs::iter& it, size_t i,
 
 static
 void explode(flecs::world& ecs, const Game& g, Position& p) {
-    for (int s = 0; s < 25; s ++) {
+    for (int s = 0; s < SmokeParticleCount; s ++) {
         float red = randf(0.5) + 0.7;
-        float green = randf(0.5);
-        float blue = randf(0.3);
+        float green = randf(0.7);
+        float blue = randf(0.4);
         float size = SmokeSize * randf(1.0);
         if (green > red) {
             green = red;
@@ -650,13 +652,14 @@ void explode(flecs::world& ecs, const Game& g, Position& p) {
 
         ecs.entity().is_a<prefabs::Smoke>()
             .set<Position>({
-                p.x + randf(SmokeRadius) - SmokeRadius / 2, 
-                p.y + randf(SmokeRadius) - SmokeRadius / 2,  
-                p.z + randf(SmokeRadius) - SmokeRadius / 2})
+                p.x + randf(ExplodeRadius) - ExplodeRadius / 2, 
+                p.y + randf(ExplodeRadius) - ExplodeRadius / 2,  
+                p.z + randf(ExplodeRadius) - ExplodeRadius / 2})
             .set<Box>({size, size, size})
             .set<Color>({red, green, blue});
     }
-    for (int s = 0; s < 15; s ++) {
+
+    for (int s = 0; s < SparkParticleCount; s ++) {
         float x_r = randf(ECS_PI_2);
         float y_r = randf(ECS_PI_2);
         float z_r = randf(ECS_PI_2);
@@ -679,9 +682,9 @@ void DestroyEnemy(flecs::entity e,
 }
 
 void UpdateEnemyColor(Color& c, Health& h) {
-    c.r = (1.0 - h.value) / 2;
-    c.g = (1.0 - h.value) / 5;
-    c.b = (1.0 - h.value) / 7;
+    c.r = (1.0 - h.value) / 20.0;
+    c.g = 0;
+    c.b = 0;
 }
 
 void init_game(flecs::world& ecs) {
@@ -804,7 +807,8 @@ void init_prefabs(flecs::world& ecs) {
     ecs.prefab<prefabs::Enemy>()
         .add<Enemy>()
         .add<Health>().override<Health>()
-        .set<Color>({0.1, 0.0, 0.18}).override<Color>()
+        .set_override<Color>({0.1, 0.0, 0.18})
+        .set<Emissive>({3.0})
         .set<Box>({EnemySize, EnemySize, EnemySize})
         .set<Specular>({4.0, 512})
         .set<SpatialQuery, Bullet>({g->center, g->size})
@@ -850,7 +854,7 @@ void init_prefabs(flecs::world& ecs) {
 
     ecs.prefab<prefabs::Smoke>().is_a<prefabs::Particle>()
         .set<Color>({0, 0, 0})
-        .set<Emissive>({12.0})
+        .set<Emissive>({13.0})
         .set<Box>({SmokeSize, SmokeSize, SmokeSize})
         .set<Particle>({
             SmokeSizeDecay, SmokeColorDecay, 1.0, SmokeLifespan
@@ -859,7 +863,7 @@ void init_prefabs(flecs::world& ecs) {
         .override<Velocity>();
 
     ecs.prefab<prefabs::Spark>().is_a<prefabs::Particle>()
-        .set<Color>({1.0, 0.5, 0.5})
+        .set<Color>({1.0, 0.5, 0.2})
         .set<Emissive>({5.0})
         .set<Box>({SparkSize, SparkSize, SparkSize})
         .set<Particle>({
