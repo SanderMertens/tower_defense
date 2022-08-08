@@ -526,7 +526,7 @@ void BeamControl(flecs::iter& it, size_t i,
             glm_vec3_normalize(v);
 
             float ion_d = randf(distance - 0.7) + 0.7;
-            Position ion_pos = {pos.x - ion_d * v[0], -1.2, pos.z - ion_d * v[2]};
+            Position ion_pos = {pos.x - ion_d * v[0], -1.1, pos.z - ion_d * v[2]};
             Velocity ion_v = {
                 randf(0.05),
                 randf(0.05),
@@ -698,7 +698,7 @@ void init_ui(flecs::world& ecs) {
     camera_data.set_up(0, -1, 0);
     camera_data.set_fov(20);
     camera_data.near_ = 1.0;
-    camera_data.far_ = 80.0;
+    camera_data.far_ = 120.0;
     auto camera = ecs.entity("Camera")
         .add(flecs::game::CameraController)
         .set<Position>({0, -9.0, -10.0})
@@ -712,11 +712,11 @@ void init_ui(flecs::world& ecs) {
         .set<graphics::DirectionalLight>(light_data);
 
     gui::Canvas canvas_data = {};
-    canvas_data.width = 1200;
-    canvas_data.height = 900;
+    canvas_data.width = 1600;
+    canvas_data.height = 1200;
     canvas_data.title = (char*)"Flecs Tower Defense";
     canvas_data.background_color = {0.60, 0.65, 0.8};
-    canvas_data.ambient_light = {0.03, 0.06, 0.09};
+    canvas_data.ambient_light = {0.03, 0.025, 0.09};
     canvas_data.camera = camera.id();
     canvas_data.directional_light = light.id();
     ecs.entity().set<gui::Canvas>(canvas_data);
@@ -749,6 +749,11 @@ void init_level(flecs::world& ecs) {
 
     g->level = ecs.entity().set<Level>({path, spawn_point});
 
+    ecs.entity()
+        .set<Position>({0, 3, to_z(TileCountZ / 2)})
+        .set<Box>({to_x(TileCountX) * 8, 5, to_z(TileCountZ) * 4})
+        .set<Color>({0.04, 0.04, 0.04});
+
     for (int x = 0; x < TileCountX; x ++) {
         for (int z = 0; z < TileCountZ; z++) {
             float xc = to_x(x);
@@ -761,7 +766,7 @@ void init_level(flecs::world& ecs) {
                 t.is_a<prefabs::Tile>();
 
                 auto e = ecs.entity().set<Position>({xc, -TileHeight / 2, zc});
-                if (randf(1) > 0.9) {
+                if (randf(1) > 0.8) {
                     e.child_of<level>();
                     e.is_a<prefabs::Tree>();
                 } else {
@@ -784,11 +789,11 @@ void init_prefabs(flecs::world& ecs) {
 
     ecs.prefab<prefabs::Tree>();
         ecs.prefab<prefabs::Tree::Trunk>()
-            .set<Position>({0, -1.0, 0})
+            .set<Position>({0, -0.75, 0})
             .set<Color>({0.25, 0.2, 0.1})
-            .set<Box>({0.5, 2.0, 0.5});
+            .set<Box>({0.5, 1.5, 0.5});
         ecs.prefab<prefabs::Tree::Canopy>()
-            .set<Position>({0, -3.0, 0})
+            .set<Position>({0, -2.5, 0})
             .set<Color>({0.2, 0.3, 0.15})
             .set<Box>({1.5, 2.0, 1.5})
             .override<Position>()
