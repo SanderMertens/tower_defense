@@ -21,7 +21,7 @@ using Box = geometry::Box;
 // Game constants
 static const float EnemySize = 0.7;
 static const float EnemySpeed = 5.0;
-static const float EnemySpawnInterval = 0.25;
+static const float EnemySpawnInterval = 0.35;
 
 static const float TurretRotateSpeed = 4.0;
 static const float TurretFireInterval = 0.1;
@@ -32,7 +32,7 @@ static const float TurretCannonLength = 0.6;
 static const float BulletSize = 0.1;
 static const float BulletSpeed = 24.0;
 static const float BulletLifespan = 0.5;
-static const float BulletDamage = 0.007;
+static const float BulletDamage = 0.0075;
 
 static const float IonSize = 0.07;
 static const float IonLifespan = 1.5;
@@ -1047,6 +1047,8 @@ void init_systems(flecs::world& ecs) {
 int main(int argc, char *argv[]) {
     flecs::world ecs;
 
+    flecs::log::set_level(2);
+
     ecs.import<flecs::components::transform>();
     ecs.import<flecs::components::graphics>();
     ecs.import<flecs::components::geometry>();
@@ -1064,8 +1066,5 @@ int main(int argc, char *argv[]) {
     init_level(ecs);
     init_systems(ecs);
 
-    ecs.app()
-        .target_fps(30)
-        .enable_rest()
-        .run();
+    ecs.app().run();
 }

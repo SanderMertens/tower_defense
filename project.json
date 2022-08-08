@@ -16,7 +16,8 @@
             "flecs.game"
         ],
         "language": "c++",
-        "use-bundle": ["flecs.hub:default"]
+        "use-bundle": ["flecs.hub:default"],
+        "standalone": true
     },
     "bundle": {
         "repositories": {

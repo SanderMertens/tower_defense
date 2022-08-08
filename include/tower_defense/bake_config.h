@@ -18,17 +18,17 @@
 #define TOWER_DEFENSE_BAKE_CONFIG_H
 
 /* Headers of public dependencies */
-#include <flecs.h>
-#include <flecs_components_transform.h>
-#include <flecs_components_graphics.h>
-#include <flecs_components_geometry.h>
-#include <flecs_components_physics.h>
-#include <flecs_components_gui.h>
-#include <flecs_components_input.h>
-#include <flecs_systems_transform.h>
-#include <flecs_systems_physics.h>
-#include <flecs_systems_sokol.h>
-#include <flecs_game.h>
+#include "../../deps/flecs.h"
+#include "../../deps/flecs_components_transform.h"
+#include "../../deps/flecs_components_graphics.h"
+#include "../../deps/flecs_components_geometry.h"
+#include "../../deps/flecs_components_physics.h"
+#include "../../deps/flecs_components_gui.h"
+#include "../../deps/flecs_components_input.h"
+#include "../../deps/flecs_systems_transform.h"
+#include "../../deps/flecs_systems_physics.h"
+#include "../../deps/flecs_systems_sokol.h"
+#include "../../deps/flecs_game.h"
 
 #endif
 
