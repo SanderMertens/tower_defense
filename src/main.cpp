@@ -20,11 +20,14 @@ using Box = geometry::Box;
 
 // Game constants
 static const float EnemySize = 0.7;
-static const float EnemySpeed = 5.0;
+static const float EnemySpeed = 4.0;
 static const float EnemySpawnInterval = 0.35;
 
+static const float RecoilAmount = 0.3;
+static const float DecreaseRecoilRate = 1.5;
+
 static const float TurretRotateSpeed = 4.0;
-static const float TurretFireInterval = 0.1;
+static const float TurretFireInterval = 0.15;
 static const float TurretRange = 5.0;
 static const float TurretCannonOffset = 0.2;
 static const float TurretCannonLength = 0.6;
@@ -32,17 +35,17 @@ static const float TurretCannonLength = 0.6;
 static const float BulletSize = 0.1;
 static const float BulletSpeed = 24.0;
 static const float BulletLifespan = 0.5;
-static const float BulletDamage = 0.005;
+static const float BulletDamage = 0.01;
 
 static const float IonSize = 0.07;
 static const float IonLifespan = 1.5;
 static const float IonDecay = 0.1;
 
 static const float BeamFireInterval = 0.1;
-static const float BeamDamage = 0.4;
+static const float BeamDamage = 0.3;
 static const float BeamSize = 0.2;
 
-static const float FireballSize = 0.3;
+static const float FireballSize = 0.2;
 static const float FireballSizeDecay = 0.0001;
 static const float FireballLifespan = 0.2;
 
@@ -174,6 +177,10 @@ struct Turret {
     float t_since_fire;
     float beam_countdown;
     int lr;
+};
+
+struct Recoil {
+    float value;
 };
 
 struct Railgun { };
@@ -545,6 +552,7 @@ void FireAtTarget(flecs::iter& it, size_t i,
 {
     auto ecs = it.world();
     bool is_railgun = it.is_set(5);
+    flecs::entity e = it.entity(i);
 
     if (turret.t_since_fire < turret.fire_interval) {
         return;
@@ -561,25 +569,35 @@ void FireAtTarget(flecs::iter& it, size_t i,
         glm_vec3_normalize(v);
 
         if (!is_railgun) {
-            pos.x += 1.8 * TurretCannonLength * -v[0];
-            pos.z += 1.8 * TurretCannonLength * -v[2];
+            pos.x += 1.75 * TurretCannonLength * -v[0];
+            pos.z += 1.75 * TurretCannonLength * -v[2];
             glm_vec3_scale(v, BulletSpeed, v);
             pos.x += sin(angle) * TurretCannonOffset * turret.lr;
-            pos.y = -1.2;
+            pos.y = -1.1;
             pos.z += cos(angle) * TurretCannonOffset * turret.lr;
+
+            flecs::entity barrel;
+            if (turret.lr == -1) {
+                barrel = e.target<prefabs::Cannon::Head::BarrelLeft>();
+            } else {
+                barrel = e.target<prefabs::Cannon::Head::BarrelRight>();
+            }
+
+            barrel.set<Recoil>({ RecoilAmount });
+
             turret.lr = -turret.lr;
             ecs.entity().is_a<prefabs::Bullet>()
                 .set<Position>(pos)
                 .set<Velocity>({-v[0], 0, -v[2]});
             ecs.entity().is_a<prefabs::Fireball>()
                 .set<Position>(pos)
-                .set<Rotation>({0, angle, 0});  
+                .set<Rotation>({0, angle, 0});
         } else if (turret.beam_countdown <= 0) {
-            it.entity(i).target<prefabs::Railgun::Head::Beam>().enable();
+            e.target<prefabs::Railgun::Head::Beam>().enable();
             turret.beam_countdown = 1.0;
-            pos.x += 1.2 * -v[0];
-            pos.y = -1.2;
-            pos.z += 1.2 * -v[2];
+            pos.x += 1.4 * -v[0];
+            pos.y = -1.1;
+            pos.z += 1.4 * -v[2];
             ecs.entity().is_a<prefabs::Bolt>()
                 .set<Position>(pos)
                 .set<Rotation>({0, angle, 0}); 
@@ -587,6 +605,17 @@ void FireAtTarget(flecs::iter& it, size_t i,
 
         turret.t_since_fire = 0;
     }
+}
+
+void ApplyRecoil(Position& p, const Recoil& r) {
+   p.x = TurretCannonLength - r.value; 
+}
+
+void DecreaseRecoil(flecs::iter& it, size_t, Recoil& r) {
+   r.value -= it.delta_time() * DecreaseRecoilRate;
+   if (r.value < 0) {
+    r.value = 0;
+   }
 }
 
 void ProgressParticle(flecs::iter& it,
@@ -698,7 +727,7 @@ void init_ui(flecs::world& ecs) {
     camera_data.set_up(0, -1, 0);
     camera_data.set_fov(20);
     camera_data.near_ = 1.0;
-    camera_data.far_ = 120.0;
+    camera_data.far_ = 100.0;
     auto camera = ecs.entity("Camera")
         .add(flecs::game::CameraController)
         .set<Position>({0, -9.0, -10.0})
@@ -751,7 +780,7 @@ void init_level(flecs::world& ecs) {
 
     ecs.entity()
         .set<Position>({0, 3, to_z(TileCountZ / 2)})
-        .set<Box>({to_x(TileCountX) * 8, 5, to_z(TileCountZ) * 4})
+        .set<Box>({to_x(TileCountX) * 4, 5, to_z(TileCountZ) * 2})
         .set<Color>({0.04, 0.04, 0.04});
 
     for (int x = 0; x < TileCountX; x ++) {
@@ -927,10 +956,12 @@ void init_prefabs(flecs::world& ecs) {
                 .set<Box>({0.8, 0.14, 0.14});
 
             ecs.prefab<prefabs::Cannon::Head::BarrelLeft>()
+                .slot_of<prefabs::Cannon>()
                 .is_a<prefabs::Cannon::Barrel>()
                 .set<Position>({TurretCannonLength, 0.0, -TurretCannonOffset}); 
 
             ecs.prefab<prefabs::Cannon::Head::BarrelRight>()
+                .slot_of<prefabs::Cannon>()
                 .is_a<prefabs::Cannon::Barrel>()
                 .set<Position>({TurretCannonLength, 0.0, TurretCannonOffset});                         
 
@@ -1023,6 +1054,14 @@ void init_systems(flecs::world& ecs) {
         .term_at(4).singleton()
         .term<Railgun>().optional()
         .each(FireAtTarget);
+
+    // Apply recoil to barrels
+    ecs.system<Position, const Recoil>("ApplyRecoil")
+        .each(ApplyRecoil);
+
+    // Decrease recoil amount over time
+    ecs.system<Recoil>("DecreaseRecoil")
+        .each(DecreaseRecoil);
 
     // Simple particle system
     ecs.system<ParticleLifespan, const Particle, Box, Color, Velocity>

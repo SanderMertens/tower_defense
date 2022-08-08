@@ -29984,7 +29984,6 @@ void SokolInitRenderer(ecs_iter_t *it) {
     ecs_trace("sokol: library initialized");
 
     sokol_resources_t resources = init_resources();
-
     sokol_offscreen_pass_t depth_pass;
     sokol_offscreen_pass_t scene_pass = sokol_init_scene_pass(
         canvas->background_color, w, h, 1, &depth_pass);
