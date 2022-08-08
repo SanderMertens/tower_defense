@@ -779,7 +779,7 @@ void init_level(flecs::world& ecs) {
     g->level = ecs.entity().set<Level>({path, spawn_point});
 
     ecs.entity()
-        .set<Position>({0, 3, to_z(TileCountZ / 2 - 0.5)})
+        .set<Position>({0, 2.5, to_z(TileCountZ / 2 - 0.5)})
         .set<Box>({to_x(TileCountX + 1) * 2, 5, to_z(TileCountZ + 4)})
         .set<Color>({0.04, 0.04, 0.04});
 
@@ -822,7 +822,7 @@ void init_prefabs(flecs::world& ecs) {
             .set<Color>({0.25, 0.2, 0.1})
             .set<Box>({0.5, 1.5, 0.5});
         ecs.prefab<prefabs::Tree::Canopy>()
-            .set<Position>({0, -2.5, 0})
+            .set<Position>({0, -2.0, 0})
             .set<Color>({0.2, 0.3, 0.15})
             .set<Box>({1.5, 1.8, 1.5});
 
@@ -1105,7 +1105,6 @@ int main(int argc, char *argv[]) {
     ecs.import<flecs::systems::physics>();
     ecs.import<flecs::systems::sokol>();
     ecs.import<flecs::game>();
-    ecs.import<flecs::monitor>();
 
     init_game(ecs);
     init_ui(ecs);
@@ -1113,5 +1112,5 @@ int main(int argc, char *argv[]) {
     init_level(ecs);
     init_systems(ecs);
 
-    ecs.app().enable_rest().run();
+    ecs.app().run();
 }
