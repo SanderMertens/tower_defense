@@ -2,21 +2,20 @@
     "id": "tower_defense",
     "type": "application",
     "value": {
-        "author": "Jane Doe",
-        "description": "A simple hello world flecs application",
-        "language": "c++",
         "use": [
             "flecs",
             "flecs.components.transform",
             "flecs.components.graphics",
             "flecs.components.geometry",
+            "flecs.components.physics",
             "flecs.components.gui",
             "flecs.components.input",
-            "flecs.components.physics",
             "flecs.systems.transform",
             "flecs.systems.physics",
-            "flecs.systems.sdl2"
+            "flecs.systems.sokol",
+            "flecs.game"
         ],
+        "language": "c++",
         "use-bundle": ["flecs.hub:default"]
     },
     "bundle": {
