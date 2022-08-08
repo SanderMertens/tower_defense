@@ -511,7 +511,7 @@ void BeamControl(flecs::iter& it, size_t i,
         Position pos = p;
         Position target_pos = enemy.get<Position>()[0];
         float distance = glm_vec3_distance(p, target_pos);
-        beam.set<Position>({ (distance / 2), 0.0, 0.0 });
+        beam.set<Position>({ (distance / 2), -0.1, 0.0 });
         beam.set<Box>({0.06, 0.06, distance});
 
         // Subtract health from enemy as long as beam is firing
