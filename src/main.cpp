@@ -35,19 +35,19 @@ static const float TurretCannonLength = 0.6;
 static const float BulletSize = 0.1;
 static const float BulletSpeed = 24.0;
 static const float BulletLifespan = 0.5;
-static const float BulletDamage = 0.01;
+static const float BulletDamage = 0.015;
 
 static const float IonSize = 0.07;
 static const float IonLifespan = 1.5;
 static const float IonDecay = 0.1;
 
 static const float BeamFireInterval = 0.1;
-static const float BeamDamage = 0.3;
+static const float BeamDamage = 0.5;
 static const float BeamSize = 0.2;
 
-static const float FireballSize = 0.2;
-static const float FireballSizeDecay = 0.0001;
-static const float FireballLifespan = 0.2;
+static const float NozzleFlashSize = 0.2;
+static const float NozzleFlashSizeDecay = 0.001;
+static const float NozzleFlashLifespan = 0.1;
 
 static const float BoltSize = 0.6;
 static const float BoltSizeDecay = 0.01;
@@ -61,9 +61,9 @@ static const float SmokeLifespan = 4.0;
 static const int SmokeParticleCount = 50;
 
 static const float SparkSize = 0.15;
-static const float SparkLifespan = 0.8;
-static const float SparkSizeDecay = 0.05;
-static const float SparkVelocityDecay = 0.08;
+static const float SparkLifespan = 2.0;
+static const float SparkSizeDecay = 0.3;
+static const float SparkVelocityDecay = 0.1;
 static const float SparkInitialVelocity = 8.0;
 static const int SparkParticleCount = 200;
 
@@ -221,7 +221,7 @@ namespace prefabs {
 
     struct Particle { };
     struct Bullet { };
-    struct Fireball { };
+    struct NozzleFlash { };
     struct Smoke { };
     struct Spark { };
     struct Ion { };
@@ -589,7 +589,7 @@ void FireAtTarget(flecs::iter& it, size_t i,
             ecs.entity().is_a<prefabs::Bullet>()
                 .set<Position>(pos)
                 .set<Velocity>({-v[0], 0, -v[2]});
-            ecs.entity().is_a<prefabs::Fireball>()
+            ecs.entity().is_a<prefabs::NozzleFlash>()
                 .set<Position>(pos)
                 .set<Rotation>({0, angle, 0});
         } else if (turret.beam_countdown <= 0) {
@@ -711,8 +711,8 @@ void DestroyEnemy(flecs::entity e,
 }
 
 void UpdateEnemyColor(Color& c, Health& h) {
-    c.r = (1.0 - h.value) / 20.0;
-    c.g = 0;
+    c.r = (1.0 - h.value) / 2.5;
+    c.g = (1.0 - h.value) / 8.0;
     c.b = 0;
 }
 
@@ -779,8 +779,8 @@ void init_level(flecs::world& ecs) {
     g->level = ecs.entity().set<Level>({path, spawn_point});
 
     ecs.entity()
-        .set<Position>({0, 3, to_z(TileCountZ / 2)})
-        .set<Box>({to_x(TileCountX) * 4, 5, to_z(TileCountZ) * 2})
+        .set<Position>({0, 3, to_z(TileCountZ / 2 - 0.5)})
+        .set<Box>({to_x(TileCountX + 1) * 2, 5, to_z(TileCountZ + 4)})
         .set<Color>({0.04, 0.04, 0.04});
 
     for (int x = 0; x < TileCountX; x ++) {
@@ -795,7 +795,7 @@ void init_level(flecs::world& ecs) {
                 t.is_a<prefabs::Tile>();
 
                 auto e = ecs.entity().set<Position>({xc, -TileHeight / 2, zc});
-                if (randf(1) > 0.8) {
+                if (randf(1) > 0.7) {
                     e.child_of<level>();
                     e.is_a<prefabs::Tree>();
                 } else {
@@ -824,9 +824,7 @@ void init_prefabs(flecs::world& ecs) {
         ecs.prefab<prefabs::Tree::Canopy>()
             .set<Position>({0, -2.5, 0})
             .set<Color>({0.2, 0.3, 0.15})
-            .set<Box>({1.5, 2.0, 1.5})
-            .override<Position>()
-            .override<Box>();
+            .set<Box>({1.5, 1.8, 1.5});
 
     ecs.prefab<prefabs::Tile>()
         .set<Color>({0.2, 0.34, 0.15})
@@ -842,7 +840,7 @@ void init_prefabs(flecs::world& ecs) {
         .add<Enemy>()
         .add<Health>().override<Health>()
         .set_override<Color>({0.1, 0.0, 0.18})
-        .set<Emissive>({3.0})
+        .set<Emissive>({12.0})
         .set<Box>({EnemySize, EnemySize, EnemySize})
         .set<Specular>({4.0, 512})
         .set<SpatialQuery, Bullet>({g->center, g->size})
@@ -878,12 +876,12 @@ void init_prefabs(flecs::world& ecs) {
             1.0, 1.0, 1.0, BulletLifespan
         });
 
-    ecs.prefab<prefabs::Fireball>().is_a<prefabs::Particle>()
+    ecs.prefab<prefabs::NozzleFlash>().is_a<prefabs::Particle>()
         .set<Color>({1.0, 0.5, 0.3})
         .set<Emissive>({5.0})
-        .set<Box>({FireballSize, FireballSize, FireballSize})
+        .set<Box>({NozzleFlashSize, NozzleFlashSize, NozzleFlashSize})
         .set<Particle>({
-            FireballSizeDecay, 1.0, 1.0, FireballLifespan
+            NozzleFlashSizeDecay, 1.0, 1.0, NozzleFlashLifespan
         });
 
     ecs.prefab<prefabs::Smoke>().is_a<prefabs::Particle>()
@@ -1107,6 +1105,7 @@ int main(int argc, char *argv[]) {
     ecs.import<flecs::systems::physics>();
     ecs.import<flecs::systems::sokol>();
     ecs.import<flecs::game>();
+    ecs.import<flecs::monitor>();
 
     init_game(ecs);
     init_ui(ecs);
@@ -1114,5 +1113,5 @@ int main(int argc, char *argv[]) {
     init_level(ecs);
     init_systems(ecs);
 
-    ecs.app().run();
+    ecs.app().enable_rest().run();
 }
