@@ -30,11 +30,11 @@
 
 /* Convenience macro for exporting symbols */
 #ifndef flecs_components_gui_STATIC
-#if flecs_components_gui_EXPORTS && (defined(_MSC_VER) || defined(__MINGW32__))
+#if defined(flecs_components_gui_EXPORTS) && (defined(_MSC_VER) || defined(__MINGW32__))
   #define FLECS_COMPONENTS_GUI_API __declspec(dllexport)
-#elif flecs_components_gui_EXPORTS
+#elif defined(flecs_components_gui_EXPORTS)
   #define FLECS_COMPONENTS_GUI_API __attribute__((__visibility__("default")))
-#elif defined _MSC_VER
+#elif defined(_MSC_VER)
   #define FLECS_COMPONENTS_GUI_API __declspec(dllimport)
 #else
   #define FLECS_COMPONENTS_GUI_API
@@ -58,10 +58,11 @@ ECS_STRUCT(EcsCanvas, {
     char *title;
     int32_t width;
     int32_t height;
-    EcsRgb background_color;
     ecs_entity_t camera;
-    EcsRgb ambient_light;
     ecs_entity_t directional_light;
+    EcsRgb background_color;
+    EcsRgb ambient_light;
+    float fog_density;
 });
 
 #ifdef __cplusplus

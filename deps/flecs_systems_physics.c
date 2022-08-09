@@ -189,7 +189,8 @@ ecs_squery_t* ecs_squery_new(
             { ecs_pair(EcsCollider, ecs_id(EcsBox)), .inout = EcsIn, .oper = EcsOr }, 
                 { ecs_id(EcsBox), .oper = EcsOr },
             { filter, .inout = EcsIn }
-        }
+        },
+        .filter.instanced = true
     });
 
     result->ot = ecs_octree_new(center, size);
@@ -217,6 +218,8 @@ void ecs_squery_update(
 
     if (ecs_query_changed(sq->q, 0)) {
         ecs_octree_clear(sq->ot);
+
+        int32_t count = 0;
 
         const ecs_world_t *world = ecs_get_world(sq->q);
         ecs_iter_t it = ecs_query_iter(world, sq->q);

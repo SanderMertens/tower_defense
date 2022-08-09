@@ -21,10 +21,12 @@ using Box = geometry::Box;
 // Game constants
 static const float EnemySize = 0.7;
 static const float EnemySpeed = 4.0;
-static const float EnemySpawnInterval = 0.35;
+static const float EnemySpawnInterval = 0.3;
 
 static const float RecoilAmount = 0.3;
 static const float DecreaseRecoilRate = 1.5;
+static const float HitCooldownRate = 1.0;
+static const float HitCooldownInitialValue = 0.25;
 
 static const float TurretRotateSpeed = 4.0;
 static const float TurretFireInterval = 0.15;
@@ -35,37 +37,37 @@ static const float TurretCannonLength = 0.6;
 static const float BulletSize = 0.1;
 static const float BulletSpeed = 24.0;
 static const float BulletLifespan = 0.5;
-static const float BulletDamage = 0.015;
+static const float BulletDamage = 0.02;
 
 static const float IonSize = 0.07;
 static const float IonLifespan = 1.5;
 static const float IonDecay = 0.1;
 
 static const float BeamFireInterval = 0.1;
-static const float BeamDamage = 0.5;
+static const float BeamDamage = 0.275;
 static const float BeamSize = 0.2;
 
 static const float NozzleFlashSize = 0.2;
 static const float NozzleFlashSizeDecay = 0.001;
 static const float NozzleFlashLifespan = 0.1;
 
-static const float BoltSize = 0.6;
-static const float BoltSizeDecay = 0.01;
-static const float BoltLifespan = 5.3;
+static const float BoltSize = 0.3;
+static const float BoltSizeDecay = 0.001;
+static const float BoltLifespan = 1.0;
 
 static const float SmokeSize = 1.5;
 static const float ExplodeRadius = 1.2;
 static const float SmokeSizeDecay = 0.4;
-static const float SmokeColorDecay = 0.01;
+static const float SmokeColorDecay = 0.005;
 static const float SmokeLifespan = 4.0;
 static const int SmokeParticleCount = 50;
 
 static const float SparkSize = 0.15;
-static const float SparkLifespan = 2.0;
-static const float SparkSizeDecay = 0.3;
-static const float SparkVelocityDecay = 0.1;
+static const float SparkLifespan = 1.0;
+static const float SparkSizeDecay = 0.1;
+static const float SparkVelocityDecay = 0.05;
 static const float SparkInitialVelocity = 8.0;
-static const int SparkParticleCount = 200;
+static const int SparkParticleCount = 100;
 
 static const float TileSize = 3.0;
 static const float TileHeight = 0.5;
@@ -180,6 +182,10 @@ struct Turret {
 };
 
 struct Recoil {
+    float value;
+};
+
+struct HitCooldown {
     float value;
 };
 
@@ -522,8 +528,9 @@ void BeamControl(flecs::iter& it, size_t i,
         beam.set<Box>({0.06, 0.06, distance});
 
         // Subtract health from enemy as long as beam is firing
-        enemy.get([&](Health& h) {
+        enemy.get([&](Health& h, HitCooldown& hc) {
             h.value -= BeamDamage * it.delta_time();
+            hc.value = HitCooldownInitialValue;
         });
 
         // Create ion trail
@@ -569,8 +576,8 @@ void FireAtTarget(flecs::iter& it, size_t i,
         glm_vec3_normalize(v);
 
         if (!is_railgun) {
-            pos.x += 1.75 * TurretCannonLength * -v[0];
-            pos.z += 1.75 * TurretCannonLength * -v[2];
+            pos.x += 1.7 * TurretCannonLength * -v[0];
+            pos.z += 1.7 * TurretCannonLength * -v[2];
             glm_vec3_scale(v, BulletSpeed, v);
             pos.x += sin(angle) * TurretCannonOffset * turret.lr;
             pos.y = -1.1;
@@ -618,6 +625,13 @@ void DecreaseRecoil(flecs::iter& it, size_t, Recoil& r) {
    }
 }
 
+void DecreaseHitCoolDown(flecs::iter& it, size_t, HitCooldown& hc) {
+   hc.value -= it.delta_time() * HitCooldownRate;
+   if (hc.value < 0) {
+    hc.value = 0;
+   }
+}
+
 void ProgressParticle(flecs::iter& it,
     ParticleLifespan *pl, const Particle *p, Box *box, Color *color, Velocity *vel)
 {
@@ -651,10 +665,10 @@ void ProgressParticle(flecs::iter& it,
 }
 
 void HitTarget(flecs::iter& it, size_t i,
-    Position& p, Health& h, Box& b)
+    Position& p, Health& h, Box& b, HitCooldown& hit_cooldown)
 {
-    auto q = it.field<const SpatialQuery>(4);
-    auto qr = it.field<SpatialQueryResult>(5);
+    auto q = it.field<const SpatialQuery>(5);
+    auto qr = it.field<SpatialQueryResult>(6);
     
     float range = b.width / 2;
 
@@ -662,6 +676,7 @@ void HitTarget(flecs::iter& it, size_t i,
     for (auto e : qr[i]) {
         it.world().entity(e.id).destruct();
         h.value -= BulletDamage;
+        hit_cooldown.value = HitCooldownInitialValue;
     }
 }
 
@@ -710,10 +725,12 @@ void DestroyEnemy(flecs::entity e,
     }
 }
 
-void UpdateEnemyColor(Color& c, Health& h) {
-    c.r = (1.0 - h.value) / 2.5;
-    c.g = (1.0 - h.value) / 8.0;
-    c.b = 0;
+void UpdateEnemyColor(Color& c, const Health& h, const HitCooldown& hc) {
+    c.r = 0.05 + hc.value;
+    c.g = 0.05 + hc.value * 0.1;
+
+    c.r += (0.3 - h.value * 0.3);
+    c.g += (0.05 - h.value * 0.05);
 }
 
 void init_game(flecs::world& ecs) {
@@ -727,27 +744,28 @@ void init_ui(flecs::world& ecs) {
     camera_data.set_up(0, -1, 0);
     camera_data.set_fov(20);
     camera_data.near_ = 1.0;
-    camera_data.far_ = 100.0;
+    camera_data.far_ = 50.0;
     auto camera = ecs.entity("Camera")
         .add(flecs::game::CameraController)
-        .set<Position>({0, -9.0, -10.0})
-        .set<Rotation>({0.4})
+        .set<Position>({0, -8.0, -9.0})
+        .set<Rotation>({0.5})
         .set<graphics::Camera>(camera_data);
 
     graphics::DirectionalLight light_data = {};
     light_data.set_direction(0.3, -1.0, 0.5);
-    light_data.set_color(0.95, 0.90, 0.75);
+    light_data.set_color(0.98, 0.95, 0.8);
     auto light = ecs.entity("Sun")
         .set<graphics::DirectionalLight>(light_data);
 
     gui::Canvas canvas_data = {};
-    canvas_data.width = 1600;
-    canvas_data.height = 1200;
+    canvas_data.width = 1400;
+    canvas_data.height = 1000;
     canvas_data.title = (char*)"Flecs Tower Defense";
-    canvas_data.background_color = {0.60, 0.65, 0.8};
-    canvas_data.ambient_light = {0.03, 0.025, 0.09};
     canvas_data.camera = camera.id();
     canvas_data.directional_light = light.id();
+    canvas_data.ambient_light = {0.06, 0.05, 0.18};
+    canvas_data.background_color = {0.15, 0.4, 0.6};
+    canvas_data.fog_density = 0.6;
     ecs.entity().set<gui::Canvas>(canvas_data);
 }
 
@@ -780,8 +798,8 @@ void init_level(flecs::world& ecs) {
 
     ecs.entity()
         .set<Position>({0, 2.5, to_z(TileCountZ / 2 - 0.5)})
-        .set<Box>({to_x(TileCountX + 1) * 2, 5, to_z(TileCountZ + 4)})
-        .set<Color>({0.04, 0.04, 0.04});
+        .set<Box>({to_x(TileCountX + 0.5) * 2, 5, to_z(TileCountZ + 2)})
+        .set<Color>({0.11, 0.15, 0.1});
 
     for (int x = 0; x < TileCountX; x ++) {
         for (int z = 0; z < TileCountZ; z++) {
@@ -836,17 +854,6 @@ void init_prefabs(flecs::world& ecs) {
         .set<Specular>({0.5, 50})
         .set<Box>({TileSize + TileSpacing, PathHeight, TileSize + TileSpacing});
 
-    ecs.prefab<prefabs::Enemy>()
-        .add<Enemy>()
-        .add<Health>().override<Health>()
-        .set_override<Color>({0.1, 0.0, 0.18})
-        .set<Emissive>({12.0})
-        .set<Box>({EnemySize, EnemySize, EnemySize})
-        .set<Specular>({4.0, 512})
-        .set<SpatialQuery, Bullet>({g->center, g->size})
-        .add<SpatialQueryResult, Bullet>()
-        .override<SpatialQueryResult, Bullet>();
-
     ecs.prefab<prefabs::materials::Beam>()
         .set<Color>({0.1, 0.4, 1})
         .set<Emissive>({9.0});
@@ -862,6 +869,18 @@ void init_prefabs(flecs::world& ecs) {
     ecs.prefab<prefabs::materials::RailgunLight>()
         .set<Color>({0.1, 0.3, 1.0})
         .set<Emissive>({3.0});
+
+    ecs.prefab<prefabs::Enemy>()
+        .is_a<prefabs::materials::Metal>()
+        .add<Enemy>()
+        .add<Health>().override<Health>()
+        .set_override<Color>({0.05, 0.05, 0.05})
+        .set<Box>({EnemySize, EnemySize, EnemySize})
+        .set<Specular>({4.0, 512})
+        .set<SpatialQuery, Bullet>({g->center, g->size})
+        .set_override<HitCooldown>({})
+        .add<SpatialQueryResult, Bullet>()
+        .override<SpatialQueryResult, Bullet>();
 
     ecs.prefab<prefabs::Particle>()
         .override<ParticleLifespan>()
@@ -891,7 +910,7 @@ void init_prefabs(flecs::world& ecs) {
         .set<Particle>({
             SmokeSizeDecay, SmokeColorDecay, 1.0, SmokeLifespan
         })
-        .set<Velocity>({0, -0.3, 0})
+        .set<Velocity>({0, -0.8, 0})
         .override<Velocity>();
 
     ecs.prefab<prefabs::Spark>().is_a<prefabs::Particle>()
@@ -965,7 +984,7 @@ void init_prefabs(flecs::world& ecs) {
 
     ecs.prefab<prefabs::Railgun>().is_a<::prefabs::Turret>()
         .add<Railgun>()
-        .set<Turret>({BeamFireInterval});    
+        .set<Turret>({BeamFireInterval});
 
         ecs.prefab<prefabs::Railgun::Head>()
             .set<Position>({0.0, -0.8, 0})
@@ -1061,6 +1080,10 @@ void init_systems(flecs::world& ecs) {
     ecs.system<Recoil>("DecreaseRecoil")
         .each(DecreaseRecoil);
 
+    // Decrease recoil amount over time
+    ecs.system<HitCooldown>("DecreaseHitCooldown")
+        .each(DecreaseHitCoolDown);
+
     // Simple particle system
     ecs.system<ParticleLifespan, const Particle, Box, Color, Velocity>
             ("ProgressParticle")
@@ -1072,7 +1095,7 @@ void init_systems(flecs::world& ecs) {
         .iter(ProgressParticle);
 
     // Test for collisions with enemies
-    ecs.system<Position, Health, Box>("HitTarget")
+    ecs.system<Position, Health, Box, HitCooldown>("HitTarget")
         .term<SpatialQuery, Bullet>().up()
         .term<SpatialQueryResult, Bullet>()
         .each(HitTarget);
@@ -1084,7 +1107,7 @@ void init_systems(flecs::world& ecs) {
         .term<Enemy>()
         .each(DestroyEnemy);
 
-    ecs.system<Color, Health>("UpdateEnemyColor")
+    ecs.system<Color, Health, const HitCooldown>("UpdateEnemyColor")
         .each(UpdateEnemyColor);
 
     });
@@ -1104,6 +1127,7 @@ int main(int argc, char *argv[]) {
     ecs.import<flecs::systems::transform>();
     ecs.import<flecs::systems::physics>();
     ecs.import<flecs::systems::sokol>();
+    // ecs.import<flecs::monitor>();
     ecs.import<flecs::game>();
 
     init_game(ecs);
@@ -1112,5 +1136,7 @@ int main(int argc, char *argv[]) {
     init_level(ecs);
     init_systems(ecs);
 
-    ecs.app().run();
+    ecs.app()
+        .enable_rest()
+        .run();
 }
