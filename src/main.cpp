@@ -21,7 +21,7 @@ using Box = geometry::Box;
 // Game constants
 static const float EnemySize = 0.7;
 static const float EnemySpeed = 4.0;
-static const float EnemySpawnInterval = 0.3;
+static const float EnemySpawnInterval = 0.25;
 
 static const float RecoilAmount = 0.3;
 static const float DecreaseRecoilRate = 1.5;
@@ -172,12 +172,10 @@ struct Turret {
         lr = 1;
         t_since_fire = 0;
         fire_interval = fire_interval_arg;
-        beam_countdown = 0;
     }
 
     float fire_interval;
     float t_since_fire;
-    float beam_countdown;
     int lr;
 };
 
@@ -501,57 +499,6 @@ void FireCountdown(flecs::iter& it, size_t i,
     Turret& turret, Target& target) 
 {
     turret.t_since_fire += it.delta_time();
-    if (turret.beam_countdown > 0) {
-        turret.beam_countdown -= it.delta_time();
-        if (turret.beam_countdown <= 0 || !target.lock) {
-            it.entity(i).target<prefabs::Railgun::Head::Beam>().disable();
-            turret.t_since_fire = 0;
-        }
-    }
-}
-
-void BeamControl(flecs::iter& it, size_t i,
-    Position& p, Turret& turret, Target& target, const Game& g) 
-{
-    flecs::entity beam = it.entity(i).target<prefabs::Railgun::Head::Beam>();
-    if (target.lock && beam && beam.enabled()) {
-        flecs::entity enemy = target.target;
-        if (!enemy.is_alive()) {
-            return;
-        }
-
-        // Position beam at enemy
-        Position pos = p;
-        Position target_pos = enemy.get<Position>()[0];
-        float distance = glm_vec3_distance(p, target_pos);
-        beam.set<Position>({ (distance / 2), -0.1, 0.0 });
-        beam.set<Box>({0.06, 0.06, distance});
-
-        // Subtract health from enemy as long as beam is firing
-        enemy.get([&](Health& h, HitCooldown& hc) {
-            h.value -= BeamDamage * it.delta_time();
-            hc.value = HitCooldownInitialValue;
-        });
-
-        // Create ion trail
-        if (randf(1.0) > 0.3) {
-            vec3 v;
-            glm_vec3_sub(pos, target_pos, v);
-            glm_vec3_normalize(v);
-
-            float ion_d = randf(distance - 0.7) + 0.7;
-            Position ion_pos = {pos.x - ion_d * v[0], -1.1, pos.z - ion_d * v[2]};
-            Velocity ion_v = {
-                randf(0.05),
-                randf(0.05),
-                randf(0.05)
-            };
-
-            it.world().entity().is_a<prefabs::Ion>()
-                .set<Position>(ion_pos)
-                .set<Velocity>(ion_v);
-        }
-    }
 }
 
 void FireAtTarget(flecs::iter& it, size_t i,
@@ -599,9 +546,8 @@ void FireAtTarget(flecs::iter& it, size_t i,
             ecs.entity().is_a<prefabs::NozzleFlash>()
                 .set<Position>(pos)
                 .set<Rotation>({0, angle, 0});
-        } else if (turret.beam_countdown <= 0) {
+        } else {
             e.target<prefabs::Railgun::Head::Beam>().enable();
-            turret.beam_countdown = 1.0;
             pos.x += 1.4 * -v[0];
             pos.y = -1.1;
             pos.z += 1.4 * -v[2];
@@ -611,6 +557,56 @@ void FireAtTarget(flecs::iter& it, size_t i,
         }
 
         turret.t_since_fire = 0;
+    }
+}
+
+void BeamControl(flecs::iter& it, size_t i,
+    Position& p, Turret& turret, Target& target, const Game& g) 
+{
+    flecs::entity beam = it.entity(i).target<prefabs::Railgun::Head::Beam>();
+    if (beam && (!target.target || !target.lock)) {
+        beam.disable();
+        beam.set<Box>({0.0, 0.0, 0});
+        return;
+    }
+
+    if (target.lock && beam && beam.enabled()) {
+        flecs::entity enemy = target.target;
+        if (!enemy.is_alive()) {
+            return;
+        }
+
+        // Position beam at enemy
+        Position pos = p;
+        Position target_pos = enemy.get<Position>()[0];
+        float distance = glm_vec3_distance(p, target_pos);
+        beam.set<Position>({ (distance / 2), -0.1, 0.0 });
+        beam.set<Box>({0.06, 0.06, distance});
+
+        // Subtract health from enemy as long as beam is firing
+        enemy.get([&](Health& h, HitCooldown& hc) {
+            h.value -= BeamDamage * it.delta_time();
+            hc.value = HitCooldownInitialValue;
+        });
+
+        // Create ion trail
+        if (randf(1.0) > 0.3) {
+            vec3 v;
+            glm_vec3_sub(pos, target_pos, v);
+            glm_vec3_normalize(v);
+
+            float ion_d = randf(distance - 0.7) + 0.7;
+            Position ion_pos = {pos.x - ion_d * v[0], -1.1, pos.z - ion_d * v[2]};
+            Velocity ion_v = {
+                randf(0.05),
+                randf(0.05),
+                randf(0.05)
+            };
+
+            it.world().entity().is_a<prefabs::Ion>()
+                .set<Position>(ion_pos)
+                .set<Velocity>(ion_v);
+        }
     }
 }
 
@@ -813,7 +809,7 @@ void init_level(flecs::world& ecs) {
                 t.is_a<prefabs::Tile>();
 
                 auto e = ecs.entity().set<Position>({xc, -TileHeight / 2, zc});
-                if (randf(1) > 0.7) {
+                if (randf(1) > 0.65) {
                     e.child_of<level>();
                     e.is_a<prefabs::Tree>();
                 } else {
@@ -1115,8 +1111,6 @@ void init_systems(flecs::world& ecs) {
 
 int main(int argc, char *argv[]) {
     flecs::world ecs;
-
-    flecs::log::set_level(2);
 
     ecs.import<flecs::components::transform>();
     ecs.import<flecs::components::graphics>();
