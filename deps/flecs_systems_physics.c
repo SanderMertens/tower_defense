@@ -219,8 +219,6 @@ void ecs_squery_update(
     if (ecs_query_changed(sq->q, 0)) {
         ecs_octree_clear(sq->ot);
 
-        int32_t count = 0;
-
         const ecs_world_t *world = ecs_get_world(sq->q);
         ecs_iter_t it = ecs_query_iter(world, sq->q);
         while (ecs_query_next(&it)) {

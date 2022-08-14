@@ -2745,7 +2745,7 @@ typedef struct ecs_filter_iter_t {
 /** Query-iterator specific data */
 typedef struct ecs_query_iter_t {
     ecs_query_t *query;
-    ecs_query_table_node_t *node, *prev;
+    ecs_query_table_node_t *node, *prev, *last;
     int32_t sparse_smallest;
     int32_t sparse_first;
     int32_t bitset_first;
@@ -2771,7 +2771,7 @@ typedef struct ecs_sparse_iter_t {
 /** Rule-iterator specific data */
 typedef struct ecs_rule_iter_t {
     const ecs_rule_t *rule;
-    struct ecs_var_t *registers;         /* Variable storage (tables, entities) */
+    struct ecs_var_t *vars;              /* Variable storage */
     struct ecs_rule_op_ctx_t *op_ctx;    /* Operation-specific state */
     
     int32_t *columns;                    /* Column indices */
@@ -2845,8 +2845,9 @@ struct ecs_iter_t {
                                    * all permutations of wildcards in query. */
     ecs_ref_t *references;        /* Cached refs to components (if iterating a cache) */
     ecs_flags64_t constrained_vars; /* Bitset that marks constrained variables */
+    uint64_t group_id;            /* Group id for table, if group_by is used */
 
-    /* Source information */
+    /* Input information */
     ecs_entity_t system;          /* The system (if applicable) */
     ecs_entity_t event;           /* The event (if applicable) */
     ecs_id_t event_id;            /* The (component) id for the event */
@@ -6302,6 +6303,33 @@ bool ecs_query_changed(
 FLECS_API
 void ecs_query_skip(
     ecs_iter_t *it);
+
+/** Set group to iterate for query iterator.
+ * This operation limits the results returned by the query to only the selected
+ * group id. The query must have a group_by function, and the iterator must
+ * be a query iterator.
+ * 
+ * Groups are sets of tables that are stored together in the query cache based
+ * on a group id, which is calculated per table by the group_by function. To 
+ * iterate a group, an iterator only needs to know the first and last cache node
+ * for that group, which can both be found in a fast O(1) operation.
+ * 
+ * As a result, group iteration is one of the most efficient mechanisms to 
+ * filter out large numbers of entities, even if those entities are distributed
+ * across many tables. This makes it a good fit for things like dividing up
+ * a world into cells, and only iterating cells close to a player.
+ * 
+ * The group to iterate must be set before the first call to ecs_query_next. No
+ * operations that can add/remove components should be invoked between calling 
+ * ecs_query_set_group and ecs_query_next.
+ * 
+ * @param it The query iterator.
+ * @param group_id The group to iterate.
+ */
+FLECS_API
+void ecs_query_set_group(
+    ecs_iter_t *it,
+    uint64_t group_id);
 
 /** Returns whether query is orphaned.
  * When the parent query of a subquery is deleted, it is left in an orphaned
@@ -13407,7 +13435,6 @@ struct string_view : string {
 }
 
 #include <string.h>
-#include <stdio.h>
 
 #define FLECS_ENUM_MAX(T) _::to_constant<T, 128>::value
 #define FLECS_ENUM_MAX_COUNT (FLECS_ENUM_MAX(int) + 1)
@@ -16949,6 +16976,11 @@ public:
         ecs_query_skip(m_iter);
     }
 
+    /* Return group id for current table (grouped queries only) */
+    uint64_t group_id() const {
+        return m_iter->group_id;
+    }
+
 #ifdef FLECS_RULES
     /** Get value of variable by id.
      * Get value of a query variable for current result.
@@ -19748,6 +19780,19 @@ flecs::string to_json(flecs::iter_to_json_desc_t *desc = nullptr) {
         return result;
     }
 
+    // Limit results to tables with specified group id (grouped queries only)
+    iter_iterable<Components...>& set_group(uint64_t group_id) {
+        ecs_query_set_group(&m_it, group_id);
+        return *this;
+    }
+
+    // Limit results to tables with specified group id (grouped queries only)
+    template <typename Group>
+    iter_iterable<Components...>& set_group() {
+        ecs_query_set_group(&m_it, _::cpp_type<Group>().id(m_it.real_world));
+        return *this;
+    }
+
 protected:
     ecs_iter_t get_iter() const {
         return m_it;
@@ -19849,7 +19894,6 @@ worker_iterable<Components...> iterable<Components...>::worker(
 }
 
 #pragma once
-#include <stdio.h>
 #include <ctype.h>
 
 namespace flecs {

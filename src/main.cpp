@@ -39,35 +39,35 @@ static const float BulletSpeed = 24.0;
 static const float BulletLifespan = 0.5;
 static const float BulletDamage = 0.02;
 
-static const float IonSize = 0.07;
-static const float IonLifespan = 1.5;
+static const float IonSize = 0.05;
+static const float IonLifespan = 1.0;
 static const float IonDecay = 0.1;
 
 static const float BeamFireInterval = 0.1;
 static const float BeamDamage = 0.275;
-static const float BeamSize = 0.2;
+static const float BeamSize = 0.04;
 
 static const float NozzleFlashSize = 0.2;
 static const float NozzleFlashSizeDecay = 0.001;
 static const float NozzleFlashLifespan = 0.1;
 
-static const float BoltSize = 0.3;
+static const float BoltSize = 0.2;
 static const float BoltSizeDecay = 0.001;
 static const float BoltLifespan = 1.0;
 
 static const float SmokeSize = 1.5;
-static const float ExplodeRadius = 1.2;
+static const float ExplodeRadius = 1.0;
 static const float SmokeSizeDecay = 0.4;
-static const float SmokeColorDecay = 0.005;
+static const float SmokeColorDecay = 0.0001;
 static const float SmokeLifespan = 4.0;
 static const int SmokeParticleCount = 50;
 
 static const float SparkSize = 0.15;
-static const float SparkLifespan = 1.0;
-static const float SparkSizeDecay = 0.1;
-static const float SparkVelocityDecay = 0.05;
+static const float SparkLifespan = 0.4;
+static const float SparkSizeDecay = 0.025;
+static const float SparkVelocityDecay = 0.025;
 static const float SparkInitialVelocity = 8.0;
-static const int SparkParticleCount = 100;
+static const int SparkParticleCount = 50;
 
 static const float TileSize = 3.0;
 static const float TileHeight = 0.5;
@@ -581,7 +581,7 @@ void BeamControl(flecs::iter& it, size_t i,
         Position target_pos = enemy.get<Position>()[0];
         float distance = glm_vec3_distance(p, target_pos);
         beam.set<Position>({ (distance / 2), -0.1, 0.0 });
-        beam.set<Box>({0.06, 0.06, distance});
+        beam.set<Box>({BeamSize, BeamSize, distance});
 
         // Subtract health from enemy as long as beam is firing
         enemy.get([&](Health& h, HitCooldown& hc) {
@@ -590,7 +590,7 @@ void BeamControl(flecs::iter& it, size_t i,
         });
 
         // Create ion trail
-        if (randf(1.0) > 0.3) {
+        if (randf(1.0) > 0.5) {
             vec3 v;
             glm_vec3_sub(pos, target_pos, v);
             glm_vec3_normalize(v);
@@ -598,9 +598,9 @@ void BeamControl(flecs::iter& it, size_t i,
             float ion_d = randf(distance - 0.7) + 0.7;
             Position ion_pos = {pos.x - ion_d * v[0], -1.1, pos.z - ion_d * v[2]};
             Velocity ion_v = {
-                randf(0.05),
-                randf(0.05),
-                randf(0.05)
+                randf(0.02),
+                randf(0.02) + 0.01f,
+                randf(0.02)
             };
 
             it.world().entity().is_a<prefabs::Ion>()
@@ -761,7 +761,7 @@ void init_ui(flecs::world& ecs) {
     canvas_data.directional_light = light.id();
     canvas_data.ambient_light = {0.06, 0.05, 0.18};
     canvas_data.background_color = {0.15, 0.4, 0.6};
-    canvas_data.fog_density = 0.7;
+    canvas_data.fog_density = 0.65;
     ecs.entity().set<gui::Canvas>(canvas_data);
 }
 
@@ -852,7 +852,7 @@ void init_prefabs(flecs::world& ecs) {
 
     ecs.prefab<prefabs::materials::Beam>()
         .set<Color>({0.1, 0.4, 1})
-        .set<Emissive>({9.0});
+        .set<Emissive>({10.0});
 
     ecs.prefab<prefabs::materials::Metal>()
         .set<Color>({0.1, 0.1, 0.1})
@@ -901,7 +901,7 @@ void init_prefabs(flecs::world& ecs) {
 
     ecs.prefab<prefabs::Smoke>().is_a<prefabs::Particle>()
         .set<Color>({0, 0, 0})
-        .set<Emissive>({13.0})
+        .set<Emissive>({20.0})
         .set<Box>({SmokeSize, SmokeSize, SmokeSize})
         .set<Particle>({
             SmokeSizeDecay, SmokeColorDecay, 1.0, SmokeLifespan
@@ -1019,7 +1019,7 @@ void init_prefabs(flecs::world& ecs) {
         ecs.prefab<prefabs::Railgun::Head::Beam>().slot_of<prefabs::Railgun>()
             .is_a<prefabs::materials::Beam>()
             .set<Position>({2, 0, 0})
-            .set<Box>({BeamSize, BeamSize, BeamSize}).override<Box>()
+            .set<Box>({0}).override<Box>()
             .set<Rotation>({0,(float)GLM_PI / 2.0f, 0});
 }
 
@@ -1121,7 +1121,7 @@ int main(int argc, char *argv[]) {
     ecs.import<flecs::systems::transform>();
     ecs.import<flecs::systems::physics>();
     ecs.import<flecs::systems::sokol>();
-    // ecs.import<flecs::monitor>();
+    ecs.import<flecs::monitor>();
     ecs.import<flecs::game>();
 
     init_game(ecs);
