@@ -187,7 +187,7 @@ struct HitCooldown {
     float value;
 };
 
-struct Railgun { };
+struct Laser { };
 
 struct Target {
     Target() {
@@ -220,7 +220,7 @@ namespace prefabs {
         struct Beam { };
         struct Metal { };
         struct CannonHead { };
-        struct RailgunLight { };
+        struct LaserLight { };
     };
 
     struct Particle { };
@@ -244,7 +244,7 @@ namespace prefabs {
         struct Barrel { };
     };
 
-    struct Railgun {
+    struct Laser {
         struct Head {
             struct Beam { };
         };
@@ -401,7 +401,7 @@ void MoveEnemy(flecs::iter& it, size_t i,
     const Level* lvl = g.level.get<Level>();
 
     if (find_path(p, d, lvl)) {
-        it.entity(i).destruct();
+        it.entity(i).destruct(); // Enemy made it to the end
     } else {
         p.x += dir[d.value].x * EnemySpeed * it.delta_time();
         p.z += dir[d.value].y * EnemySpeed * it.delta_time();
@@ -412,12 +412,14 @@ void ClearTarget(Target& target, Position& p) {
     flecs::entity t = target.target;
     if (t) {
         if (!t.is_alive()) {
+            // Target was destroyed or made it to the end
             target.target = flecs::entity::null();
             target.lock = false;
         } else {
             Position target_pos = t.get<Position>()[0];
             float distance = glm_vec3_distance(p, target_pos);
             if (distance > TurretRange) {
+                // Target is out of range
                 target.target = flecs::entity::null();
                 target.lock = false;
             }
@@ -432,12 +434,14 @@ void FindTarget(flecs::iter& it, size_t i,
     auto qr = it.field<SpatialQueryResult>(5);
 
     if (target.target) {
+        // Already has a target
         return;
     }
 
     flecs::entity enemy;
     float distance = 0, min_distance = 0;
 
+    // Find all enemies around the turret's position within TurretRange
     q->findn(p, TurretRange, qr[i]);
     for (auto e : qr[i]) {
         distance = glm_vec3_distance(p, e.pos);
@@ -452,6 +456,7 @@ void FindTarget(flecs::iter& it, size_t i,
     }
 
     if (min_distance) {
+        // Select the closest enemy in range as target
         target.target = enemy;
         target.distance = min_distance;
     }
@@ -474,7 +479,7 @@ void AimTarget(flecs::iter& it, size_t i,
         float distance = glm_vec3_distance(p, target_p);
 
         // Crude correction for enemy movement and bullet travel time
-        flecs::entity beam = e.target<prefabs::Railgun::Head::Beam>();
+        flecs::entity beam = e.target<prefabs::Laser::Head::Beam>();
         if (!beam) {
             glm_vec3_scale(diff, distance * 5, diff);
             glm_vec3_add(target_p, diff, target_p);
@@ -502,13 +507,14 @@ void FireCountdown(flecs::iter& it, size_t i,
 }
 
 void FireAtTarget(flecs::iter& it, size_t i,
-    Turret& turret, Target& target, Position& p, const Game& g)
+    Turret& turret, Target& target, Position& p)
 {
     auto ecs = it.world();
-    bool is_railgun = it.is_set(5);
+    bool is_laser = it.is_set(4);
     flecs::entity e = it.entity(i);
 
     if (turret.t_since_fire < turret.fire_interval) {
+        // Cooldown so we don't shoot too fast
         return;
     }
 
@@ -522,7 +528,8 @@ void FireAtTarget(flecs::iter& it, size_t i,
         glm_vec3_sub(p, target_p, v);
         glm_vec3_normalize(v);
 
-        if (!is_railgun) {
+        if (!is_laser) {
+            // Regular cannon with two barrels
             pos.x += 1.7 * TurretCannonLength * -v[0];
             pos.z += 1.7 * TurretCannonLength * -v[2];
             glm_vec3_scale(v, BulletSpeed, v);
@@ -530,16 +537,19 @@ void FireAtTarget(flecs::iter& it, size_t i,
             pos.y = -1.1;
             pos.z += cos(angle) * TurretCannonOffset * turret.lr;
 
+            // Alternate between left and right barrel
             flecs::entity barrel;
             if (turret.lr == -1) {
                 barrel = e.target<prefabs::Cannon::Head::BarrelLeft>();
             } else {
                 barrel = e.target<prefabs::Cannon::Head::BarrelRight>();
             }
+            turret.lr = -turret.lr;
 
+            // Move active barrel backwards to simulate recoil
             barrel.set<Recoil>({ RecoilAmount });
 
-            turret.lr = -turret.lr;
+            // Create a bullet and nozzle flash
             ecs.entity().is_a<prefabs::Bullet>()
                 .set<Position>(pos)
                 .set<Velocity>({-v[0], 0, -v[2]});
@@ -547,7 +557,8 @@ void FireAtTarget(flecs::iter& it, size_t i,
                 .set<Position>(pos)
                 .set<Rotation>({0, angle, 0});
         } else {
-            e.target<prefabs::Railgun::Head::Beam>().enable();
+            // Enable laser beam
+            e.target<prefabs::Laser::Head::Beam>().enable();
             pos.x += 1.4 * -v[0];
             pos.y = -1.1;
             pos.z += 1.4 * -v[2];
@@ -561,10 +572,11 @@ void FireAtTarget(flecs::iter& it, size_t i,
 }
 
 void BeamControl(flecs::iter& it, size_t i,
-    Position& p, Turret& turret, Target& target, const Game& g) 
+    Position& p, Turret& turret, Target& target) 
 {
-    flecs::entity beam = it.entity(i).target<prefabs::Railgun::Head::Beam>();
+    flecs::entity beam = it.entity(i).target<prefabs::Laser::Head::Beam>();
     if (beam && (!target.target || !target.lock)) {
+        // Disable beam if laser turret has no target
         beam.disable();
         beam.set<Box>({0.0, 0.0, 0});
         return;
@@ -589,7 +601,7 @@ void BeamControl(flecs::iter& it, size_t i,
             hc.value = HitCooldownInitialValue;
         });
 
-        // Create ion trail
+        // Create ion trail particles
         if (randf(1.0) > 0.5) {
             vec3 v;
             glm_vec3_sub(pos, target_pos, v);
@@ -631,28 +643,28 @@ void DecreaseHitCoolDown(flecs::iter& it, size_t, HitCooldown& hc) {
 void ProgressParticle(flecs::iter& it,
     ParticleLifespan *pl, const Particle *p, Box *box, Color *color, Velocity *vel)
 {
-    if (it.is_set(3)) {
+    if (it.is_set(3)) { // Size
         for (auto i : it) {
             box[i].width *= pow(p->size_decay, it.delta_time());
             box[i].height *= pow(p->size_decay, it.delta_time());
             box[i].depth *= pow(p->size_decay, it.delta_time());
         }
     }
-    if (it.is_set(4)) {
+    if (it.is_set(4)) { // Color
         for (auto i : it) {
             color[i].r *= pow(p->color_decay, it.delta_time());
             color[i].g *= pow(p->color_decay, it.delta_time());
             color[i].b *= pow(p->color_decay, it.delta_time());
         }        
     }
-    if (it.is_set(5)) {
+    if (it.is_set(5)) { // Velocity
         for (auto i : it) {
             vel[i].x *= pow(p->velocity_decay, it.delta_time());
             vel[i].y *= pow(p->velocity_decay, it.delta_time());
             vel[i].z *= pow(p->velocity_decay, it.delta_time());
         }          
     }
-    for (auto i : it) {
+    for (auto i : it) { // Lifespan
         pl[i].t += it.delta_time();
         if (pl[i].t > p->lifespan) {
             it.entity(i).destruct();
@@ -668,16 +680,18 @@ void HitTarget(flecs::iter& it, size_t i,
     
     float range = b.width / 2;
 
+    // Test whether bullet hit an enemy
     q->findn(p, range, qr[i]);
     for (auto e : qr[i]) {
         it.world().entity(e.id).destruct();
         h.value -= BulletDamage;
-        hit_cooldown.value = HitCooldownInitialValue;
+        hit_cooldown.value = HitCooldownInitialValue; // For color effect
     }
 }
 
 static
-void explode(flecs::world& ecs, const Game& g, Position& p) {
+void explode(flecs::world& ecs, Position& p) {
+    // Create explosion particles that fade into smoke
     for (int s = 0; s < SmokeParticleCount; s ++) {
         float red = randf(0.5) + 0.7;
         float green = randf(0.7);
@@ -699,6 +713,7 @@ void explode(flecs::world& ecs, const Game& g, Position& p) {
             .set<Color>({red, green, blue});
     }
 
+    // Create sparks
     for (int s = 0; s < SparkParticleCount; s ++) {
         float x_r = randf(ECS_PI_2);
         float y_r = randf(ECS_PI_2);
@@ -711,20 +726,20 @@ void explode(flecs::world& ecs, const Game& g, Position& p) {
     }
 }
 
-void DestroyEnemy(flecs::entity e,
-    Health& h, Position& p, const Game& g, const graphics::Camera& cam) 
-{
+void DestroyEnemy(flecs::entity e, Health& h, Position& p) {
     flecs::world ecs = e.world();
     if (h.value <= 0) {
         e.destruct();
-        explode(ecs, g, p);
+        explode(ecs, p);
     }
 }
 
 void UpdateEnemyColor(Color& c, const Health& h, const HitCooldown& hc) {
+    // Increase brightness after hit
     c.r = 0.05 + hc.value;
     c.g = 0.05 + hc.value * 0.1;
 
+    // Increase brightness as health decreases
     c.r += (0.3 - h.value * 0.3);
     c.g += (0.05 - h.value * 0.05);
 }
@@ -817,8 +832,8 @@ void init_level(flecs::world& ecs) {
                     if (randf(1) > 0.3) {
                         e.is_a<prefabs::Cannon>();
                     } else {
-                        e.is_a<prefabs::Railgun>();
-                        e.target<prefabs::Railgun::Head::Beam>().disable();
+                        e.is_a<prefabs::Laser>();
+                        e.target<prefabs::Laser::Head::Beam>().disable();
                     }
                 }
             }           
@@ -826,7 +841,6 @@ void init_level(flecs::world& ecs) {
     }                          
 }
 
-// Init prefabs
 void init_prefabs(flecs::world& ecs) {
     Game *g = ecs.get_mut<Game>();
 
@@ -862,7 +876,7 @@ void init_prefabs(flecs::world& ecs) {
         .set<Color>({0.35, 0.4, 0.3})
         .set<Specular>({0.5, 25});
 
-    ecs.prefab<prefabs::materials::RailgunLight>()
+    ecs.prefab<prefabs::materials::LaserLight>()
         .set<Color>({0.1, 0.3, 1.0})
         .set<Emissive>({3.0});
 
@@ -978,45 +992,45 @@ void init_prefabs(flecs::world& ecs) {
                 .is_a<prefabs::Cannon::Barrel>()
                 .set<Position>({TurretCannonLength, 0.0, TurretCannonOffset});                         
 
-    ecs.prefab<prefabs::Railgun>().is_a<::prefabs::Turret>()
-        .add<Railgun>()
+    ecs.prefab<prefabs::Laser>().is_a<::prefabs::Turret>()
+        .add<Laser>()
         .set<Turret>({BeamFireInterval});
 
-        ecs.prefab<prefabs::Railgun::Head>()
+        ecs.prefab<prefabs::Laser::Head>()
             .set<Position>({0.0, -0.8, 0})
             .set<Rotation>({0, 0.0, 0});
 
             ecs.prefab().is_a<prefabs::materials::Metal>()
-                .child_of<prefabs::Railgun::Head>()
+                .child_of<prefabs::Laser::Head>()
                 .set<Box>({0.9, 0.3, 0.16})
                 .set<Position>({0.1, 0.0, -0.3});
                 
             ecs.prefab().is_a<prefabs::materials::Metal>()
-                .child_of<prefabs::Railgun::Head>()
+                .child_of<prefabs::Laser::Head>()
                 .set<Box>({0.9, 0.3, 0.16})
                 .set<Position>({0.1, 0.0, 0.3});                
 
-            ecs.prefab().is_a<prefabs::materials::RailgunLight>()
-                .child_of<prefabs::Railgun::Head>()
+            ecs.prefab().is_a<prefabs::materials::LaserLight>()
+                .child_of<prefabs::Laser::Head>()
                 .set<Box>({0.8, 0.2, 0.1})
                 .set<Position>({0.1, 0.0, -0.20});
 
-            ecs.prefab().is_a<prefabs::materials::RailgunLight>()
-                .child_of<prefabs::Railgun::Head>()
+            ecs.prefab().is_a<prefabs::materials::LaserLight>()
+                .child_of<prefabs::Laser::Head>()
                 .set<Box>({0.8, 0.2, 0.1})
                 .set<Position>({0.1, 0.0, 0.2});
 
             ecs.prefab().is_a<prefabs::materials::Metal>()
-                .child_of<prefabs::Railgun::Head>()
+                .child_of<prefabs::Laser::Head>()
                 .set<Box>({1.6, 0.5, 0.3})
                 .set<Position>({0.24, 0, 0.0});  
 
             ecs.prefab().is_a<prefabs::materials::Metal>()
-                .child_of<prefabs::Railgun::Head>()
+                .child_of<prefabs::Laser::Head>()
                 .set<Box>({1.0, 0.16, 0.16})
                 .set<Position>({0.8, -0.1, 0.0});                  
 
-        ecs.prefab<prefabs::Railgun::Head::Beam>().slot_of<prefabs::Railgun>()
+        ecs.prefab<prefabs::Laser::Head::Beam>().slot_of<prefabs::Laser>()
             .is_a<prefabs::materials::Beam>()
             .set<Position>({2, 0, 0})
             .set<Box>({0}).override<Box>()
@@ -1058,14 +1072,12 @@ void init_systems(flecs::world& ecs) {
         .each(FireCountdown);
 
     // Aim beam at target
-    ecs.system<Position, Turret, Target, const Game>("BeamControl")
-        .term_at(4).singleton()
+    ecs.system<Position, Turret, Target>("BeamControl")
         .each(BeamControl);
 
     // Fire bullets at enemies
-    ecs.system<Turret, Target, Position, const Game>("FireAtTarget")
-        .term_at(4).singleton()
-        .term<Railgun>().optional()
+    ecs.system<Turret, Target, Position>("FireAtTarget")
+        .term<Laser>().optional()
         .each(FireAtTarget);
 
     // Apply recoil to barrels
@@ -1096,16 +1108,14 @@ void init_systems(flecs::world& ecs) {
         .term<SpatialQueryResult, Bullet>()
         .each(HitTarget);
 
-    ecs.system<Health, Position, const Game, const graphics::Camera>
-            ("DestroyEnemy")
-        .term_at(3).singleton()
-        .term_at(4).src("Camera")
+    // Destroy enemy when health goes to 0
+    ecs.system<Health, Position>("DestroyEnemy")
         .term<Enemy>()
         .each(DestroyEnemy);
 
+    // Update enemy color when hit & when health decreases
     ecs.system<Color, Health, const HitCooldown>("UpdateEnemyColor")
         .each(UpdateEnemyColor);
-
     });
 }
 

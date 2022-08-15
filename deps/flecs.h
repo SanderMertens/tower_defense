@@ -2469,8 +2469,7 @@ struct ecs_term_t {
     ecs_id_t id_flags;          /* Id flags of term id */
     char *name;                 /* Name of term */
 
-    int32_t index;              /* Computed term index in filter which takes 
-                                 * into account folded OR terms */
+    int32_t field_index;        /* Index of field for term in iterator */
 
     bool move;                  /* Used by internals */
 };
@@ -2484,7 +2483,7 @@ struct ecs_filter_t {
     
     ecs_term_t *terms;         /* Array containing terms for filter */
     int32_t term_count;        /* Number of elements in terms array */
-    int32_t term_count_actual; /* Processed count, which folds OR terms */
+    int32_t field_count;       /* Number of fields in iterator for filter */
     
     bool owned;                /* Is filter object owned by filter */
     bool terms_owned;          /* Is terms array owned by filter */
@@ -2771,7 +2770,7 @@ typedef struct ecs_sparse_iter_t {
 /** Rule-iterator specific data */
 typedef struct ecs_rule_iter_t {
     const ecs_rule_t *rule;
-    struct ecs_var_t *vars;              /* Variable storage */
+    struct ecs_var_t *registers;         /* Variable storage (tables, entities) */
     struct ecs_rule_op_ctx_t *op_ctx;    /* Operation-specific state */
     
     int32_t *columns;                    /* Column indices */
@@ -2846,6 +2845,7 @@ struct ecs_iter_t {
     ecs_ref_t *references;        /* Cached refs to components (if iterating a cache) */
     ecs_flags64_t constrained_vars; /* Bitset that marks constrained variables */
     uint64_t group_id;            /* Group id for table, if group_by is used */
+    int32_t field_count;          /* Number of fields in iterator */
 
     /* Input information */
     ecs_entity_t system;          /* The system (if applicable) */
@@ -2855,7 +2855,6 @@ struct ecs_iter_t {
     /* Query information */
     ecs_term_t *terms;            /* Terms of query being evaluated */
     int32_t table_count;          /* Active table count for query */
-    int32_t term_count;           /* Number of terms in query */
     int32_t term_index;           /* Index of term that emitted an event.
                                    * This field will be set to the 'index' field
                                    * of an observer term. */
@@ -16839,7 +16838,7 @@ public:
     /** Number of fields in iteator.
      */
     int32_t field_count() const {
-        return m_iter->term_count;
+        return m_iter->field_count;
     }
 
     /** Size of field data type.
