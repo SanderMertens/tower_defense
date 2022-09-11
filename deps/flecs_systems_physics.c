@@ -160,6 +160,10 @@ void FlecsSystemsPhysicsImport(
 
     ECS_SYSTEM(world, EcsUpdateSpatialQuery, EcsPreUpdate, 
         SpatialQuery(self, *), ?Prefab);
+
+    ecs_system(world, { .entity = EcsMove2, .query.filter.instanced = true });
+    ecs_system(world, { .entity = EcsMove3, .query.filter.instanced = true });
+    ecs_system(world, { .entity = EcsRotate3, .query.filter.instanced = true });
 }
 
 
