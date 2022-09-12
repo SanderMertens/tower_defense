@@ -7753,9 +7753,24 @@ const ecs_type_t* ecs_table_get_type(
  * @param table The table.
  * @return The component array, or NULL if the index is not a component.
  */
+FLECS_API
 void* ecs_table_get_column(
     ecs_table_t *table,
     int32_t index);
+
+/** Get column index for id.
+ * This operation returns the index for an id in the table's type.
+ * 
+ * @param world The world.
+ * @param table The table.
+ * @param id The id.
+ * @return The index of the id in the table type, or -1 if not found.
+ */
+FLECS_API
+int32_t ecs_table_get_index(
+    const ecs_world_t *world,
+    const ecs_table_t *table,
+    ecs_id_t id);
 
 /** Get storage type for table.
  *
@@ -7767,11 +7782,13 @@ ecs_table_t* ecs_table_get_storage_table(
     const ecs_table_t *table);
 
 /** Convert index in table type to index in table storage type. */
+FLECS_API
 int32_t ecs_table_type_to_storage_index(
     const ecs_table_t *table,
     int32_t index);
 
 /** Convert index in table storage type to index in table type. */
+FLECS_API
 int32_t ecs_table_storage_to_type_index(
     const ecs_table_t *table,
     int32_t index);
@@ -19980,7 +19997,24 @@ struct iterable {
      */
     template <typename Func>
     void each(Func&& func) const {
-        iterate<_::each_invoker>(FLECS_FWD(func), 
+        each(nullptr, FLECS_FWD(func));
+    }
+
+    template <typename Func>
+    void each(flecs::world_t *world, Func&& func) const {
+        iterate<_::each_invoker>(world, FLECS_FWD(func), 
+            this->next_each_action());
+    }
+
+    template <typename Func>
+    void each(flecs::iter& it, Func&& func) const {
+        iterate<_::each_invoker>(it.world(), FLECS_FWD(func),
+            this->next_each_action());
+    }
+
+    template <typename Func>
+    void each(flecs::entity e, Func&& func) const {
+        iterate<_::each_invoker>(e.world(), FLECS_FWD(func), 
             this->next_each_action());
     }
 
@@ -19997,13 +20031,31 @@ struct iterable {
      */
     template <typename Func>
     void iter(Func&& func) const { 
-        iterate<_::iter_invoker>(FLECS_FWD(func), this->next_action());
+        iterate<_::iter_invoker>(nullptr, FLECS_FWD(func), this->next_action());
+    }
+
+    template <typename Func>
+    void iter(flecs::world_t *world, Func&& func) const {
+        iterate<_::iter_invoker>(world, FLECS_FWD(func), 
+            this->next_each_action());
+    }
+
+    template <typename Func>
+    void iter(flecs::iter& it, Func&& func) const {
+        iterate<_::iter_invoker>(it.world(), FLECS_FWD(func),
+            this->next_each_action());
+    }
+
+    template <typename Func>
+    void iter(flecs::entity e, Func&& func) const {
+        iterate<_::iter_invoker>(e.world(), FLECS_FWD(func), 
+            this->next_each_action());
     }
 
     /** Create iterator.
      * Create an iterator object that can be modified before iterating.
      */
-    iter_iterable<Components...> iter() const;
+    iter_iterable<Components...> iter(flecs::world_t *world = nullptr) const;
 
     /** Page iterator.
      * Create an iterator that limits the returned entities with offset/limit.
@@ -20045,13 +20097,13 @@ protected:
     friend page_iterable<Components...>;
     friend worker_iterable<Components...>;
 
-    virtual ecs_iter_t get_iter() const = 0;
+    virtual ecs_iter_t get_iter(flecs::world_t *stage) const = 0;
     virtual ecs_iter_next_action_t next_action() const = 0;
     virtual ecs_iter_next_action_t next_each_action() const = 0;
 
     template < template<typename Func, typename ... Comps> class Invoker, typename Func, typename NextFunc, typename ... Args>
-    void iterate(Func&& func, NextFunc next, Args &&... args) const {
-        ecs_iter_t it = this->get_iter();
+    void iterate(flecs::world_t *stage, Func&& func, NextFunc next, Args &&... args) const {
+        ecs_iter_t it = this->get_iter(stage);
         if (Invoker<Func, Components...>::instanced()) {
             ECS_BIT_SET(it.flags, EcsIterIsInstanced);
         }
@@ -20065,9 +20117,9 @@ protected:
 template <typename ... Components>
 struct iter_iterable final : iterable<Components...> {
     template <typename Iterable>
-    iter_iterable(Iterable *it) 
+    iter_iterable(Iterable *it, flecs::world_t *world) 
     {
-        m_it = it->get_iter();
+        m_it = it->get_iter(world);
         m_next = it->next_action();
         m_next_each = it->next_action();
     }
@@ -20142,7 +20194,12 @@ flecs::string to_json(flecs::iter_to_json_desc_t *desc = nullptr) {
     }
 
 protected:
-    ecs_iter_t get_iter() const {
+    ecs_iter_t get_iter(flecs::world_t *world) const {
+        if (world) {
+            ecs_iter_t result = m_it;
+            result.world = world;
+            return result;
+        }
         return m_it;
     }
 
@@ -20161,9 +20218,9 @@ private:
 };
 
 template <typename ... Components>
-iter_iterable<Components...> iterable<Components...>::iter() const
+iter_iterable<Components...> iterable<Components...>::iter(flecs::world_t *world) const
 {
-    return iter_iterable<Components...>(this);
+    return iter_iterable<Components...>(this, world);
 }
 
 template <typename ... Components>
@@ -20173,11 +20230,11 @@ struct page_iterable final : iterable<Components...> {
         : m_offset(offset)
         , m_limit(limit)
     {
-        m_chain_it = it->get_iter();
+        m_chain_it = it->get_iter(nullptr);
     }
 
 protected:
-    ecs_iter_t get_iter() const {
+    ecs_iter_t get_iter(flecs::world_t*) const {
         return ecs_page_iter(&m_chain_it, m_offset, m_limit);
     }
 
@@ -20209,11 +20266,11 @@ struct worker_iterable final : iterable<Components...> {
         : m_offset(offset)
         , m_limit(limit)
     {
-        m_chain_it = it->get_iter();
+        m_chain_it = it->get_iter(nullptr);
     }
 
 protected:
-    ecs_iter_t get_iter() const {
+    ecs_iter_t get_iter(flecs::world_t*) const {
         return ecs_worker_iter(&m_chain_it, m_offset, m_limit);
     }
 
@@ -22302,7 +22359,10 @@ public:
     }
 
 private:
-    ecs_iter_t get_iter() const override {
+    ecs_iter_t get_iter(flecs::world_t *world) const override {
+        if (!world) {
+            world = m_world;
+        }
         return ecs_filter_iter(m_world, m_filter_ptr);
     }
 
@@ -22689,8 +22749,11 @@ public:
 private:
     using Terms = typename _::term_ptrs<Components...>::array;
 
-    ecs_iter_t get_iter() const override {
-        return ecs_query_iter(m_world, m_query);
+    ecs_iter_t get_iter(flecs::world_t *world) const override {
+        if (!world) {
+            world = m_world;
+        }
+        return ecs_query_iter(world, m_query);
     }
 
     ecs_iter_next_action_t next_action() const override {
@@ -23779,7 +23842,10 @@ struct rule final : rule_base, iterable<Components...> {
 private:
     using Terms = typename _::term_ptrs<Components...>::array;
 
-    ecs_iter_t get_iter() const override {
+    ecs_iter_t get_iter(flecs::world_t *world) const override {
+        if (!world) {
+            world = m_world;
+        }
         return ecs_rule_iter(m_world, m_rule);
     }
 

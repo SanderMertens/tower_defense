@@ -27074,12 +27074,6 @@ SOKOL_API_IMPL sg_context_desc sapp_sgcontext(void) {
 #define SOKOL_DEFAULT_DEPTH_NEAR (2.0)
 #define SOKOL_DEFAULT_DEPTH_FAR (2500.0)
 
-#ifndef __EMSCRIPTEN__
-#define SOKOL_HIGH_DPI true
-#else
-#define SOKOL_HIGH_DPI false
-#endif
-
 typedef struct SokolQuery {
     ecs_query_t *query;
 } SokolQuery;
@@ -27152,6 +27146,7 @@ typedef struct sokol_offscreen_pass_t {
     sg_pipeline pip;
     sg_image depth_target;
     sg_image color_target;
+    int32_t sample_count;
 } sokol_offscreen_pass_t;
 
 
@@ -27238,6 +27233,8 @@ typedef struct sokol_fx_input_t {
 typedef struct sokol_fx_output_desc_t {
     int16_t width;
     int16_t height;
+    bool global_size;
+    float factor;
 } sokol_fx_output_desc_t;
 
 typedef struct sokol_fx_step_t {
@@ -27271,6 +27268,8 @@ typedef struct sokol_fx_output_t {
     sg_pass pass[2];
     int8_t step_count;
     int8_t toggle;
+    bool global_size;
+    float factor;
 } sokol_fx_output_t;
 
 typedef struct sokol_fx_pass_t {
@@ -27283,6 +27282,7 @@ typedef struct sokol_fx_pass_t {
     int8_t sample_count;
     int8_t mipmap_count;
     int8_t output_count;
+    sg_pixel_format color_format;
     sokol_fx_output_t outputs[SOKOL_MAX_FX_OUTPUTS];
 
     int8_t step_count;
@@ -27296,6 +27296,8 @@ typedef struct SokolFx {
     sokol_fx_pass_t pass[SOKOL_MAX_FX_PASS];
     int8_t input_count;
     int8_t pass_count;
+    int16_t width;
+    int16_t height;
 } SokolFx;
 
 typedef struct sokol_fx_resources_t {
@@ -27327,6 +27329,11 @@ sg_image sokol_fx_run(
 int sokol_fx_add_pass(
     SokolFx *fx, 
     sokol_fx_pass_desc_t *pass);
+
+void sokol_fx_update_size(
+    SokolFx *fx, 
+    int32_t width,
+    int32_t height);
 
 #endif
 
@@ -27390,16 +27397,16 @@ extern const char *shd_blur_hdr;
 extern const char *shd_blur;
 
 SokolFx sokol_init_hdr(
-    int width, int height);
+    int width, 
+    int height);
 
 SokolFx sokol_init_fog(
-    int width, int height);
+    int width,
+    int height);
 
 SokolFx sokol_init_ssao(
-    int width, int height);
-
-sokol_fx_resources_t* sokol_init_fx(
-    int width, int height);
+    int width, 
+    int height);
 
 void sokol_fog_set_params(
     SokolFx *fx,
@@ -27407,6 +27414,15 @@ void sokol_fog_set_params(
     float g,
     float b,
     float density);
+
+sokol_fx_resources_t* sokol_init_fx(
+    int width, 
+    int height);
+
+void sokol_update_fx(
+    sokol_fx_resources_t *fx, 
+    int width, 
+    int height);
 
 #endif
 
@@ -27431,6 +27447,13 @@ sokol_offscreen_pass_t sokol_init_depth_pass(
     sg_image depth_target,
     int32_t sample_count);
 
+void sokol_update_depth_pass(
+    sokol_offscreen_pass_t *pass,
+    int32_t w,
+    int32_t h,
+    sg_image depth_target,
+    int32_t sample_count);
+
 void sokol_run_depth_pass(
     sokol_offscreen_pass_t *pass,
     sokol_render_state_t *state);
@@ -27441,6 +27464,12 @@ sokol_offscreen_pass_t sokol_init_scene_pass(
     int32_t w, 
     int32_t h,
     int32_t sample_count,
+    sokol_offscreen_pass_t *depth_pass_out);
+
+void sokol_update_scene_pass(
+    sokol_offscreen_pass_t *pass,
+    int32_t w,
+    int32_t h,
     sokol_offscreen_pass_t *depth_pass_out);
 
 /* Screen pass */
@@ -27740,8 +27769,25 @@ void keys_reset(
 }
 
 static
+ecs_entity_t sokol_get_canvas(const ecs_world_t *world) {
+    ecs_entity_t result = 0;
+
+    ecs_iter_t it = ecs_term_iter(world, &(ecs_term_t) {
+        .id = ecs_id(EcsCanvas)
+    });
+
+    if (ecs_term_next(&it)) {
+        result = it.entities[0];
+        ecs_iter_fini(&it);
+    }
+
+    return result;
+}
+
+static
 void sokol_input_action(const sapp_event* evt, sokol_app_ctx_t *ctx) {
-    EcsInput *input = ecs_singleton_get_mut(ctx->world, EcsInput);
+    ecs_world_t *world = ctx->world;
+    EcsInput *input = ecs_singleton_get_mut(world, EcsInput);
 
     switch (evt->type) {
     case SAPP_EVENTTYPE_MOUSE_DOWN:
@@ -27757,7 +27803,6 @@ void sokol_input_action(const sapp_event* evt, sokol_app_ctx_t *ctx) {
         key_down(key_get(input, key_code(evt->key_code)));
         break;
     case SAPP_EVENTTYPE_RESIZED:
-        // TODO
         break;
     default:
         break;
@@ -27786,23 +27831,21 @@ int sokol_run_action(
         .desc = desc
     };
 
-    /* Find canvas instance for width, height & title */
-    ecs_iter_t it = ecs_term_iter(world, &(ecs_term_t) {
-        .id = ecs_id(EcsCanvas)
-    });
-
     int width = 800, height = 600;
     const char *title = "Flecs App";
 
-    if (ecs_term_next(&it)) {
-        EcsCanvas *canvas = ecs_field(&it, EcsCanvas, 1);
-        width = canvas->width;
-        height = canvas->height;
-        title = canvas->title;
+    /* Find canvas instance for width, height & title */
+    ecs_entity_t canvas = sokol_get_canvas(world);
+    if (canvas) {
+        const EcsCanvas *canvas_data = ecs_get(world, canvas, EcsCanvas);
+        width = canvas_data->width;
+        height = canvas_data->height;
     }
 
-    /* If there is more than one canvas, ignore */
-    while (ecs_term_next(&it)) { }
+#ifdef __EMSCRIPTEN__
+    width = 0; /* determined by browser */
+    height = 0;
+#endif
 
     /* Initialize input component */
     ecs_singleton_set(world, EcsInput, { 0 });
@@ -27818,7 +27861,7 @@ int sokol_run_action(
         .width = width,
         .height = height,
         .sample_count = 1,
-        .high_dpi = SOKOL_HIGH_DPI,
+        .high_dpi = true,
         .gl_force_gles2 = false
     });
 
@@ -28058,6 +28101,8 @@ SokolFx sokol_init_hdr(
 
     SokolFx fx = {0};
     fx.name = "Hdr";
+    fx.width = width;
+    fx.height = height;
 
     int threshold = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
         .name = "threshold",
@@ -28137,7 +28182,7 @@ SokolFx sokol_init_hdr(
 
     sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
         .name = "hdr",
-        .outputs = {{width, height}},
+        .outputs = {{ .global_size = true }},
         .shader = shd_hdr,
         .inputs = { "hdr", "bloom" },
         .params = { "exposure", "gamma" },
@@ -28158,7 +28203,7 @@ SokolFx sokol_init_hdr(
 static
 const char *shd_ssao_header = 
     // Increase/decrease to trade quality for performance
-    "#define NUM_SAMPLES 10\n"
+    "#define NUM_SAMPLES 8\n"
     // The sample kernel uses a spiral pattern so most samples are concentrated
     // close to the center. 
     "#define NUM_RINGS 3\n"
@@ -28301,18 +28346,13 @@ SokolFx sokol_init_ssao(
 
     SokolFx fx = {0};
     fx.name = "AmbientOcclusion";
-
-    int ao_width = width, ao_height = height;
-
-    if (SOKOL_HIGH_DPI) {
-        ao_width /= 2.0;
-        ao_height /= 2.0;
-    }
+    fx.width = width;
+    fx.height = height;
 
     // Ambient occlusion shader 
     int32_t ao = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
         .name = "ssao",
-        .outputs = {{ao_width, ao_height}},
+        .outputs = {{ .global_size = true, .factor = 0.5 }},
         .shader_header = shd_ssao_header,
         .shader = shd_ssao,
         .color_format = SG_PIXELFORMAT_RGBA8,
@@ -28327,7 +28367,7 @@ SokolFx sokol_init_ssao(
     // Blur to reduce the noise, so we can keep sample count low
     int blur = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
         .name = "blur",
-        .outputs = {{512}},
+        .outputs = {{256}},
         .shader_header = shd_blur_hdr,
         .shader = shd_blur,
         .color_format = SG_PIXELFORMAT_RGBA8,
@@ -28351,7 +28391,7 @@ SokolFx sokol_init_ssao(
     // Multiply ambient occlusion with the scene
     sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
         .name = "blend",
-        .outputs = {{width, height}},
+        .outputs = {{ .global_size = true }},
         .shader_header = shd_blend_mult_header,
         .shader = shd_blend_mult,
         .color_format = SG_PIXELFORMAT_RGBA16F,
@@ -28380,7 +28420,6 @@ SokolFx sokol_init_blend(
     SokolFx fx = {0};
     fx.name = "Blend";
 
-
     return fx;
 }
 
@@ -28393,6 +28432,16 @@ sokol_fx_resources_t* sokol_init_fx(
     result->fog = sokol_init_fog(w, h);
     result->ssao = sokol_init_ssao(w, h);
     return result;
+}
+
+void sokol_update_fx(
+    sokol_fx_resources_t *fx, 
+    int width, 
+    int height)
+{
+    sokol_fx_update_size(&fx->hdr, width, height);
+    sokol_fx_update_size(&fx->fog, width, height);
+    sokol_fx_update_size(&fx->ssao, width, height);
 }
 
 
@@ -28423,10 +28472,12 @@ SokolFx sokol_init_fog(
 
     SokolFx fx = {0};
     fx.name = "Fog";
+    fx.width = width;
+    fx.height = height;
 
     sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
         .name = "fog",
-        .outputs = {{width, height}},
+        .outputs = {{ .global_size = true }},
         .shader_header = shd_fog_header,
         .shader = shd_fog,
         .color_format = SG_PIXELFORMAT_RGBA16F,
@@ -28610,6 +28661,7 @@ int sokol_fx_add_pass(
     pass->sample_count = pass_desc->sample_count;
     pass->loop_count = 1;
     sg_pixel_format color_format = pass_desc->color_format;
+    pass->color_format = color_format;
 
     if (!color_format) {
         color_format = SG_PIXELFORMAT_RGBA8;
@@ -28730,7 +28782,8 @@ int sokol_fx_add_pass(
         }
 
         if (step->output >= SOKOL_MAX_FX_OUTPUTS || 
-            pass_desc->outputs[step->output].width == 0)
+            ((pass_desc->outputs[step->output].width == 0) &&
+                !pass_desc->outputs[step->output].global_size))
         {
             ecs_fatal("sokol: fx step '%s.%s.%s' has an invalid output",
                 fx->name, pass->name, step->name);
@@ -28752,6 +28805,12 @@ int sokol_fx_add_pass(
     /* Add outputs */
     for (int32_t i = 0; i < SOKOL_MAX_FX_OUTPUTS; i ++) {
         sokol_fx_output_desc_t *output = &pass_desc->outputs[i];
+        if (output->global_size) {
+            output->width = fx->width;
+            output->height = fx->height;
+            ecs_assert(output->width != 0, ECS_INVALID_PARAMETER, NULL);
+            ecs_assert(output->height != 0, ECS_INVALID_PARAMETER, NULL);
+        }
         if (!output->width) {
             break;
         }
@@ -28760,13 +28819,16 @@ int sokol_fx_add_pass(
         }
 
         pass->outputs[i].out[0] = sokol_target(fx->name, output->width, 
-            output->height, pass->sample_count, pass->mipmap_count, color_format);
+            output->height, pass->sample_count, pass->mipmap_count, 
+            color_format);
         pass->outputs[i].pass[0] = sg_make_pass(&(sg_pass_desc){
             .color_attachments[0].image = pass->outputs[i].out[0]
         });
 
         pass->outputs[i].width = output->width;
         pass->outputs[i].height = output->height;
+        pass->outputs[i].global_size = output->global_size;
+        pass->outputs[i].factor = output->factor;
 
         int32_t step_count = 0;
         for (int s = 0; s < pass->step_count; s ++) {
@@ -28937,6 +28999,47 @@ sg_image sokol_fx_run(
     return fx->pass[fx->pass_count - 1].outputs[0].out[0];
 }
 
+void sokol_fx_update_size(
+    SokolFx *fx, 
+    int32_t width,
+    int32_t height)
+{
+    for (int p = 0; p < fx->pass_count; p ++) {
+        sokol_fx_pass_t *pass = &fx->pass[p];
+        for (int o = 0; o < pass->output_count; o ++) {
+            sokol_fx_output_t *output = &pass->outputs[o];
+            if (!output->global_size) {
+                continue;
+            }
+
+            output->width = width;
+            output->height = height;
+            if (output->factor) {
+                output->width *= output->factor;
+                output->height *= output->factor;
+            }
+
+            sg_destroy_pass(output->pass[0]);
+            sg_destroy_image(output->out[0]);
+            output->out[0] = sokol_target(fx->name, output->width, 
+                output->height, pass->sample_count, pass->mipmap_count, 
+                pass->color_format);
+            output->pass[0] = sg_make_pass(&(sg_pass_desc){
+                .color_attachments[0].image = output->out[0]});
+
+            if (output->step_count > 1) {
+                sg_destroy_pass(output->pass[1]);
+                sg_destroy_image(output->out[1]);
+                output->out[1] = sokol_target(fx->name, output->width, 
+                    output->height, pass->sample_count, pass->mipmap_count, 
+                    pass->color_format);
+                output->pass[1] = sg_make_pass(&(sg_pass_desc){
+                    .color_attachments[0].image = output->out[1]});
+            }
+        }
+    }
+}
+
 
 typedef struct depth_vs_uniforms_t {
     mat4 mat_vp;
@@ -29068,7 +29171,8 @@ sokol_offscreen_pass_t sokol_init_depth_pass(
 {
     ecs_trace("sokol: initialize depth pass");
 
-    sg_image color_target = sokol_target_rgba8("Depth color target", w, h, sample_count);
+    sg_image color_target = sokol_target_rgba8(
+        "Depth color target", w, h, sample_count);
     ecs_rgb_t background_color = {1, 1, 1};
 
     return (sokol_offscreen_pass_t){
@@ -29081,6 +29185,25 @@ sokol_offscreen_pass_t sokol_init_depth_pass(
         .color_target = color_target,
         .depth_target = depth_target
     };
+}
+
+void sokol_update_depth_pass(
+    sokol_offscreen_pass_t *pass,
+    int32_t w,
+    int32_t h,
+    sg_image depth_target,
+    int32_t sample_count)
+{
+    sg_destroy_image(pass->color_target);
+    sg_destroy_pass(pass->pass);
+
+    pass->color_target = sokol_target_rgba8(
+        "Depth color target", w, h, sample_count);
+
+    pass->pass = sg_make_pass(&(sg_pass_desc){
+        .color_attachments[0].image = pass->color_target,
+        .depth_stencil_attachment.image = depth_target
+    });
 }
 
 static
@@ -29343,6 +29466,23 @@ sg_pipeline init_scene_pipeline(int32_t sample_count) {
     });
 }
 
+static
+void update_scene_pass(
+    sokol_offscreen_pass_t *pass,
+    int32_t w, 
+    int32_t h,
+    int32_t sample_count)
+{
+    pass->color_target = sokol_target_rgba16f(
+        "Scene color target", w, h, sample_count, 1);
+    pass->depth_target = sokol_target_depth(w, h, sample_count);
+
+    pass->pass = sg_make_pass(&(sg_pass_desc){
+        .color_attachments[0].image = pass->color_target,
+        .depth_stencil_attachment.image = pass->depth_target
+    });
+}
+
 sokol_offscreen_pass_t sokol_init_scene_pass(
     ecs_rgb_t background_color,
     int32_t w, 
@@ -29350,27 +29490,36 @@ sokol_offscreen_pass_t sokol_init_scene_pass(
     int32_t sample_count,
     sokol_offscreen_pass_t *depth_pass_out) 
 {
-    sg_image color_target = sokol_target_rgba16f("Scene color target", w, h, sample_count, 1);
-    sg_image depth_target = sokol_target_depth(w, h, sample_count);
-
     ecs_trace("sokol: initialize scene pass");
+    sokol_offscreen_pass_t pass;
+    ecs_os_zeromem(&pass);
+    update_scene_pass(&pass, w, h, sample_count);
 
-    sg_pass pass = sg_make_pass(&(sg_pass_desc){
-        .color_attachments[0].image = color_target,
-        .depth_stencil_attachment.image = depth_target
-    });
+    *depth_pass_out = sokol_init_depth_pass(w, h, 
+        pass.depth_target, sample_count);
 
-    *depth_pass_out = sokol_init_depth_pass(w, h, depth_target, sample_count);
+    pass.pass_action = sokol_clear_action(background_color, true, false);
+    pass.pip = init_scene_pipeline(sample_count);
+    pass.sample_count = sample_count;
 
     ecs_trace("sokol: initialize scene pipeline");
+    return pass;
+}
 
-    return (sokol_offscreen_pass_t){
-        .pass_action = sokol_clear_action(background_color, true, false),
-        .pass = pass,
-        .pip = init_scene_pipeline(sample_count),
-        .color_target = color_target,
-        .depth_target = depth_target
-    };   
+void sokol_update_scene_pass(
+    sokol_offscreen_pass_t *pass,
+    int32_t w,
+    int32_t h,
+    sokol_offscreen_pass_t *depth_pass)
+{
+    ecs_dbg_3("sokol: update scene pass");
+    sg_destroy_pass(pass->pass);
+    sg_destroy_image(pass->color_target);
+    sg_destroy_image(pass->depth_target);
+
+    update_scene_pass(pass, w, h, pass->sample_count);
+    sokol_update_depth_pass(depth_pass, w, h, 
+        pass->depth_target, pass->sample_count);
 }
 
 static
@@ -29919,8 +30068,22 @@ void SokolRender(ecs_iter_t *it) {
     state.shadow_map = r->shadow_pass.color_target;
     state.resources = &r->resources;
 
-    /* Load active camera & light data from canvas */
     const EcsCanvas *canvas = ecs_get(world, r->canvas, EcsCanvas);
+
+    /* Resize resources if canvas changed */
+    if (state.width != canvas->width || state.height != canvas->height) {
+        EcsCanvas *canvas_w = ecs_get_mut(world, r->canvas, EcsCanvas);
+        canvas_w->width = state.width;
+        canvas_w->height = state.height;
+        ecs_modified(world, r->canvas, EcsCanvas);
+
+        ecs_dbg_3("sokol: update canvas size to %d, %d", state.width, state.height);
+        sokol_update_scene_pass(&r->scene_pass, state.width, state.height,
+            &r->depth_pass);
+        sokol_update_fx(r->fx, state.width, state.height);
+    }
+
+    /* Load active camera & light data from canvas */
     if (canvas->camera) {
         state.camera = ecs_get(world, canvas->camera, EcsCamera);
     }
@@ -29967,8 +30130,6 @@ void SokolRender(ecs_iter_t *it) {
     /* HDR */
     sokol_fx_run(&fx->hdr, 1, (sg_image[]){ scene_with_fog },
         &state, &r->screen_pass);
-
-    // sokol_run_screen_pass(&r->screen_pass, &r->resources, &state, hdr);
 }
 
 static
