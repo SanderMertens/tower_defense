@@ -1,6 +1,6 @@
+#include <iostream>
 #include <tower_defense.h>
 #include <vector>
-#include <iostream>
 
 using namespace flecs::components;
 
@@ -21,7 +21,7 @@ using Box = geometry::Box;
 // Game constants
 static const float EnemySize = 0.7;
 static const float EnemySpeed = 4.0;
-static const float EnemySpawnInterval = 0.25;
+static const float EnemySpawnInterval = 0.2;
 
 static const float RecoilAmount = 0.3;
 static const float DecreaseRecoilRate = 1.5;
@@ -29,7 +29,7 @@ static const float HitCooldownRate = 1.0;
 static const float HitCooldownInitialValue = 0.25;
 
 static const float TurretRotateSpeed = 4.0;
-static const float TurretFireInterval = 0.15;
+static const float TurretFireInterval = 0.12;
 static const float TurretRange = 5.0;
 static const float TurretCannonOffset = 0.2;
 static const float TurretCannonLength = 0.6;
@@ -66,8 +66,8 @@ static const float SparkSize = 0.15;
 static const float SparkLifespan = 0.4;
 static const float SparkSizeDecay = 0.025;
 static const float SparkVelocityDecay = 0.025;
-static const float SparkInitialVelocity = 8.0;
-static const int SparkParticleCount = 50;
+static const float SparkInitialVelocity = 9.0;
+static const int SparkParticleCount = 20;
 
 static const float TileSize = 3.0;
 static const float TileHeight = 0.5;
@@ -160,7 +160,7 @@ struct Direction {
 
 struct Health {
     Health() {
-        value = 1;
+        value = 1.0;
     }
     float value;
 };
@@ -262,6 +262,9 @@ struct turrets { };
 
 // Scope for enemies
 struct enemies { };
+
+// Scope for particles
+struct particles { };
 
 // Utility functions
 float randf(float scale) {
@@ -562,7 +565,7 @@ void FireAtTarget(flecs::iter& it, size_t i,
             pos.x += 1.4 * -v[0];
             pos.y = -1.1;
             pos.z += 1.4 * -v[2];
-            ecs.entity().is_a<prefabs::Bolt>()
+            ecs.scope<particles>().entity().is_a<prefabs::Bolt>()
                 .set<Position>(pos)
                 .set<Rotation>({0, angle, 0}); 
         }
@@ -615,7 +618,7 @@ void BeamControl(flecs::iter& it, size_t i,
                 randf(0.02)
             };
 
-            it.world().entity().is_a<prefabs::Ion>()
+            it.world().scope<particles>().entity().is_a<prefabs::Ion>()
                 .set<Position>(ion_pos)
                 .set<Velocity>(ion_v);
         }
@@ -704,7 +707,7 @@ void explode(flecs::world& ecs, Position& p) {
             blue = green;
         }
 
-        ecs.entity().is_a<prefabs::Smoke>()
+        ecs.scope<particles>().entity().is_a<prefabs::Smoke>()
             .set<Position>({
                 p.x + randf(ExplodeRadius) - ExplodeRadius / 2, 
                 p.y + randf(ExplodeRadius) - ExplodeRadius / 2,  
@@ -719,7 +722,7 @@ void explode(flecs::world& ecs, Position& p) {
         float y_r = randf(ECS_PI_2);
         float z_r = randf(ECS_PI_2);
         float speed = randf(SparkInitialVelocity) + 2.0;
-        ecs.entity().is_a<prefabs::Spark>()
+        ecs.scope<particles>().entity().is_a<prefabs::Spark>()
             .set<Position>({p.x, p.y, p.z}) 
             .set<Velocity>({
                 cos(x_r) * speed, cos(y_r) * speed, cos(z_r) * speed});
@@ -1120,7 +1123,9 @@ void init_systems(flecs::world& ecs) {
 }
 
 int main(int argc, char *argv[]) {
-    flecs::world ecs;
+    flecs::world ecs(argc, argv);
+
+    flecs::log::set_level(0);
 
     ecs.import<flecs::components::transform>();
     ecs.import<flecs::components::graphics>();
@@ -1130,9 +1135,9 @@ int main(int argc, char *argv[]) {
     ecs.import<flecs::components::input>();
     ecs.import<flecs::systems::transform>();
     ecs.import<flecs::systems::physics>();
-    ecs.import<flecs::systems::sokol>();
     ecs.import<flecs::monitor>();
     ecs.import<flecs::game>();
+    ecs.import<flecs::systems::sokol>();
 
     init_game(ecs);
     init_ui(ecs);

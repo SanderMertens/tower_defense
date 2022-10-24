@@ -2,6 +2,11 @@
 
 #include "flecs_components_transform.h"
 
+ECS_COMPONENT_DECLARE(EcsTransform2);
+ECS_COMPONENT_DECLARE(EcsTransform3);
+ECS_COMPONENT_DECLARE(EcsProject2);
+ECS_COMPONENT_DECLARE(EcsProject3);
+
 void FlecsComponentsTransformImport(
     ecs_world_t *world)
 {
@@ -18,9 +23,9 @@ void FlecsComponentsTransformImport(
     ECS_META_COMPONENT(world, EcsRotation3);
     ECS_META_COMPONENT(world, EcsQuaternion);
 
-    ECS_COMPONENT(world, EcsTransform2);
-    ECS_COMPONENT(world, EcsTransform3);
-    ECS_COMPONENT(world, EcsProject2);
-    ECS_COMPONENT(world, EcsProject3);
+    ECS_COMPONENT_DEFINE(world, EcsTransform2);
+    ECS_COMPONENT_DEFINE(world, EcsTransform3);
+    ECS_COMPONENT_DEFINE(world, EcsProject2);
+    ECS_COMPONENT_DEFINE(world, EcsProject3);
 }
 

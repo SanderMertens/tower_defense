@@ -5,6 +5,15 @@ ECS_CTOR(EcsSpatialQuery, ptr, {
     ptr->query = NULL;
 })
 
+ECS_MOVE(EcsSpatialQuery, dst, src, {
+    if (dst->query) {
+        ecs_squery_free(dst->query);
+    }
+
+    dst->query = src->query;
+    src->query = NULL;
+})
+
 ECS_DTOR(EcsSpatialQuery, ptr, {
     if (ptr->query) {
         ecs_squery_free(ptr->query);
@@ -13,6 +22,15 @@ ECS_DTOR(EcsSpatialQuery, ptr, {
 
 ECS_CTOR(EcsSpatialQueryResult, ptr, {
     ptr->results = NULL;
+})
+
+ECS_MOVE(EcsSpatialQueryResult, dst, src, {
+    if (dst->results) {
+        ecs_vector_free(dst->results);
+    }
+
+    dst->results = src->results;
+    src->results = NULL;
 })
 
 ECS_DTOR(EcsSpatialQueryResult, ptr, {
@@ -130,12 +148,14 @@ void FlecsSystemsPhysicsImport(
 
     ecs_set_hooks(world, EcsSpatialQuery, {
         .ctor = ecs_ctor(EcsSpatialQuery),
-        .dtor = ecs_dtor(EcsSpatialQuery)
+        .dtor = ecs_dtor(EcsSpatialQuery),
+        .move = ecs_move(EcsSpatialQuery)
     });
 
     ecs_set_hooks(world, EcsSpatialQueryResult, {
         .ctor = ecs_ctor(EcsSpatialQueryResult),
-        .dtor = ecs_dtor(EcsSpatialQueryResult)
+        .dtor = ecs_dtor(EcsSpatialQueryResult),
+        .move = ecs_move(EcsSpatialQueryResult)
     });    
 
     ECS_SYSTEM(world, EcsMove2, EcsOnUpdate, 

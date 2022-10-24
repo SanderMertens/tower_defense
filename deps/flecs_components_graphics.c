@@ -28,12 +28,6 @@ void FlecsComponentsGraphicsImport(
 
     ecs_set_name_prefix(world, "Ecs");
 
-    /* Preregister before injecting metadata, so we can register ctor */
-    // ECS_COMPONENT_DEFINE(world, EcsCamera);
-    // ecs_set_component_actions(world, EcsCamera, {
-    //     .ctor = ecs_ctor(EcsCamera)
-    // });
-
     ECS_META_COMPONENT(world, EcsCamera);
     ECS_META_COMPONENT(world, EcsDirectionalLight);
     ECS_META_COMPONENT(world, EcsRgb);

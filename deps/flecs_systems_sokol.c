@@ -27500,7 +27500,7 @@ void sokol_run_screen_pass(
 
 /* Component with material id, assigned to any entity that has material data */
 typedef struct {
-    uint32_t material_id;
+    uint32_t value;
 } SokolMaterialId;
 
 /* Element with material parameters */
@@ -27542,6 +27542,7 @@ typedef struct SokolRenderer {
     sokol_fx_resources_t *fx;
 
     ecs_entity_t canvas;
+    ecs_entity_t camera;
 } SokolRenderer;
 
 extern ECS_COMPONENT_DECLARE(SokolRenderer);
@@ -27557,60 +27558,126 @@ void FlecsSystemsSokolRendererImport(
 #define SOKOL_MODULES_GEOMETRY_H
 
 
-typedef enum sokol_buffer_draw_kind_t {
-    SokolDrawSolid = 1,
-    SokolDrawEmissive = 2,
-    SokolDrawTransparent = 4,
-} sokol_buffer_draw_kind_t;
-
 typedef void (*sokol_geometry_action_t)(
-    ecs_iter_t *qit, 
-    int32_t offset, 
-    mat4 *transforms);
+    mat4 *transforms,
+    void *data,
+    int32_t count,
+    bool self);
 
-typedef struct sokol_instances_t {
-    /* Instanced GPU buffers */
-    sg_buffer color_buffer;
-    sg_buffer transform_buffer;
-    sg_buffer material_buffer;
+#define SOKOL_GEOMETRY_PAGE_SIZE (65536)
 
-    /* Application-cached buffers */
-    ecs_rgba_t *colors;
+typedef struct sokol_geometry_page_t {
+    /* Buffers with instanced data */
+    ecs_rgb_t *colors;
     mat4 *transforms;
     SokolMaterial *materials;
+
+    /* Number of instances in page */
+    int32_t count;
+
+    /* Next page */
+    struct sokol_geometry_page_t *next;
+} sokol_geometry_page_t;
+
+struct sokol_geometry_buffer_t;
+
+/* A group stores geometry data for a (world_cell, prefab) combination. Groups
+ * are only updated when their data has changed. If an entity is not an instance
+ * of a prefab, or does not have a world cell, 0 is used as placeholder. */
+typedef struct sokol_geometry_group_t {
+    /* Pages with instanced data */
+    sokol_geometry_page_t *first_page;
+    sokol_geometry_page_t *last_page;
+    sokol_geometry_page_t *first_no_data;
+
+    /* Prev/next group for buffers */
+    struct sokol_geometry_group_t *prev, *next;
+
+    /* Backref to buffer that group is part of */
+    struct sokol_geometry_buffer_t *buffer;
+
+    /* ref<DrawDistance> to determine if group contents are visible */
+    ecs_ref_t draw_distance;
+
+    /* Number of instances in the group */
+    int32_t count;
+
+    /* Last match count. Used to detect if tables were removed from group */
+    int32_t match_count;
+
+    /* Is group visible */
+    bool visible;
+
+    /* Group id */
+    uint64_t id;
+} sokol_geometry_group_t;
+
+/* Buffers are maintained per world cell. Multiple groups can be stored in one
+ * set of buffers if a cell contains entities of different kinds of prefabs. */
+typedef struct sokol_geometry_buffer_t {
+    /* Buffer id */
+    ecs_entity_t id;
+
+    /* ref<CellCoord> to find location and size of cell */
+    ecs_ref_t cell_coord;
+
+    /* Linked list with groups for buffers */
+    sokol_geometry_group_t *groups;
+
+    /* Linked list with all buffers for geometry */
+    struct sokol_geometry_buffer_t *prev, *next;
+
+    /* Did any of the group data change */
+    bool changed;
+} sokol_geometry_buffer_t;
+
+typedef struct sokol_geometry_buffers_t {
+    sokol_geometry_buffer_t *first;
+    ecs_map_t index; /* map<world_cell, sokol_geometry_buffer_t*> */
+
+    /* Temporary buffers for storing data gathered from ECS. This allows data to
+     * be copied in one call to the graphics API. */
+    ecs_vec_t colors_data;
+    ecs_vec_t transforms_data;
+    ecs_vec_t materials_data;
+
+    /* Sokol buffers with instanced data */
+    sg_buffer colors;
+    sg_buffer transforms;
+    sg_buffer materials;
 
     /* Number of instances */
     int32_t instance_count;
 
-    /* Max number of instances allowed in current buffer */
-    int32_t instance_max;
- } sokol_instances_t;
+    /* Allocator */
+    ecs_allocator_t allocator;
+} sokol_geometry_buffers_t;
 
 typedef struct SokolGeometry {
-    /* Static GPU buffers */
-    sg_buffer vertex_buffer;
-    sg_buffer normal_buffer;
-    sg_buffer index_buffer;
+    /* GPU buffers with static geometry data */
+    sg_buffer vertices;
+    sg_buffer normals;
+    sg_buffer indices;
 
     /* Number of indices */
     int32_t index_count;
 
-    /* Instanced data per category */
-    sokol_instances_t solid;
-    sokol_instances_t emissive;
-    sokol_instances_t transparent;
+    /* Buffers with instanced data (one set per world cell) */
+    sokol_geometry_buffers_t *solid;
+    sokol_geometry_buffers_t *emissive;
 
     /* Function that copies geometry-specific data to GPU buffer */
     sokol_geometry_action_t populate;
+
+    /* Temporary storage for group ids to process */
+    ecs_vec_t group_ids;
 } SokolGeometry;
 
 typedef struct SokolGeometryQuery {
     ecs_entity_t component;
-    bool static_geometry;
     ecs_query_t *parent_query;
     ecs_query_t *solid;
     ecs_query_t *emissive;
-    ecs_query_t *transparent;
 } SokolGeometryQuery;
 
 extern ECS_COMPONENT_DECLARE(SokolGeometry);
@@ -27802,8 +27869,9 @@ void sokol_input_action(const sapp_event* evt, sokol_app_ctx_t *ctx) {
     case SAPP_EVENTTYPE_KEY_DOWN:
         key_down(key_get(input, key_code(evt->key_code)));
         break;
-    case SAPP_EVENTTYPE_RESIZED:
+    case SAPP_EVENTTYPE_RESIZED: {
         break;
+    }
     default:
         break;
     }
@@ -27842,9 +27910,9 @@ int sokol_run_action(
         height = canvas_data->height;
     }
 
+    bool high_dpi = true;
 #ifdef __EMSCRIPTEN__
-    width = 0; /* determined by browser */
-    height = 0;
+    high_dpi = false; /* high dpi doesn't work on mobile browsers */
 #endif
 
     /* Initialize input component */
@@ -27861,7 +27929,7 @@ int sokol_run_action(
         .width = width,
         .height = height,
         .sample_count = 1,
-        .high_dpi = true,
+        .high_dpi = high_dpi,
         .gl_force_gles2 = false
     });
 
@@ -27994,21 +28062,22 @@ sokol_offscreen_pass_t sokol_init_shadow_pass(
 static
 void shadow_draw_instances(
     SokolGeometry *geometry,
-    sokol_instances_t *instances)
+    sokol_geometry_buffers_t *buffers)
 {
-    if (!instances->instance_count) {
+    if (!buffers->instance_count) {
         return;
     }
 
     sg_bindings bind = {
         .vertex_buffers = {
-            [0] = geometry->vertex_buffer,
-            [1] = instances->transform_buffer
+            [0] = geometry->vertices,
+            [1] = buffers->transforms
         },
-        .index_buffer = geometry->index_buffer
+        .index_buffer = geometry->indices
     };
+
     sg_apply_bindings(&bind);
-    sg_draw(0, geometry->index_count, instances->instance_count);    
+    sg_draw(0, geometry->index_count, buffers->instance_count);
 }
 
 void sokol_run_shadow_pass(
@@ -28033,11 +28102,11 @@ void sokol_run_shadow_pass(
         int b;
         for (b = 0; b < qit.count; b ++) {
             /* Only draw solids, ignore emissive and transparent (for now) */
-            shadow_draw_instances(&geometry[b], &geometry[b].solid);
+            shadow_draw_instances(&geometry[b], geometry[b].solid);
         }
     }
 
-    sg_end_pass();   
+    sg_end_pass();
 }
 
 
@@ -28098,6 +28167,7 @@ SokolFx sokol_init_hdr(
     int width, int height)
 {
     ecs_trace("sokol: initialize hdr effect");
+    ecs_log_push();
 
     SokolFx fx = {0};
     fx.name = "Hdr";
@@ -28193,6 +28263,8 @@ SokolFx sokol_init_hdr(
             }
         }
     });
+
+    ecs_log_pop();
 
     return fx;
 }
@@ -28343,6 +28415,7 @@ SokolFx sokol_init_ssao(
     int width, int height)
 {
     ecs_trace("sokol: initialize ambient occlusion effect");
+    ecs_log_push();
 
     SokolFx fx = {0};
     fx.name = "AmbientOcclusion";
@@ -28402,6 +28475,8 @@ SokolFx sokol_init_ssao(
             }
         }
     });
+
+    ecs_log_pop();
 
     return fx;
 }
@@ -28469,6 +28544,7 @@ SokolFx sokol_init_fog(
     int width, int height)
 {
     ecs_trace("sokol: initialize fog effect");
+    ecs_log_push();
 
     SokolFx fx = {0};
     fx.name = "Fog";
@@ -28491,6 +28567,8 @@ SokolFx sokol_init_fog(
             }
         }
     });
+
+    ecs_log_pop();
 
     return fx;
 }
@@ -29209,23 +29287,22 @@ void sokol_update_depth_pass(
 static
 void depth_draw_instances(
     SokolGeometry *geometry,
-    sokol_instances_t *instances)
+    sokol_geometry_buffers_t *buffers)
 {
-    if (!instances->instance_count) {
+    if (!buffers->instance_count) {
         return;
     }
 
     sg_bindings bind = {
         .vertex_buffers = {
-            [0] = geometry->vertex_buffer,
-            [1] = instances->transform_buffer
+            [0] = geometry->vertices,
+            [1] = buffers->transforms
         },
-        .index_buffer = geometry->index_buffer
+        .index_buffer = geometry->indices
     };
 
     sg_apply_bindings(&bind);
-
-    sg_draw(0, geometry->index_count, instances->instance_count);
+    sg_draw(0, geometry->index_count, buffers->instance_count);
 }
 
 void sokol_run_depth_pass(
@@ -29256,8 +29333,8 @@ void sokol_run_depth_pass(
 
         int b;
         for (b = 0; b < qit.count; b ++) {
-            depth_draw_instances(&geometry[b], &geometry[b].solid);
-            depth_draw_instances(&geometry[b], &geometry[b].emissive);
+            depth_draw_instances(&geometry[b], geometry[b].solid);
+            depth_draw_instances(&geometry[b], geometry[b].emissive);
         }
     }
 
@@ -29328,7 +29405,7 @@ sg_pipeline init_scene_pipeline(int32_t sample_count) {
             "uniform mat4 u_light_vp;\n"
             LAYOUT(POSITION_I)  "in vec3 v_position;\n"
             LAYOUT(NORMAL_I)    "in vec3 v_normal;\n"
-            LAYOUT(COLOR_I)     "in vec4 i_color;\n"
+            LAYOUT(COLOR_I)     "in vec3 i_color;\n"
             LAYOUT(MATERIAL_I)  "in vec3 i_material;\n"
             LAYOUT(TRANSFORM_I) "in mat4 i_mat_m;\n"
             "out vec4 position;\n"
@@ -29342,7 +29419,7 @@ sg_pipeline init_scene_pipeline(int32_t sample_count) {
             "  light_position = u_light_vp * i_mat_m * pos4;\n"
             "  position = (i_mat_m * pos4);\n"
             "  normal = (i_mat_m * vec4(v_normal, 0.0)).xyz;\n"
-            "  color = i_color;\n"
+            "  color = vec4(i_color, 0.0);\n"
             "  material = i_material;\n"
             "}\n",
 
@@ -29426,7 +29503,7 @@ sg_pipeline init_scene_pipeline(int32_t sample_count) {
         .index_type = SG_INDEXTYPE_UINT16,
         .layout = {
             .buffers = {
-                [COLOR_I] =     { .stride = 16, .step_func=SG_VERTEXSTEP_PER_INSTANCE },
+                [COLOR_I] =     { .stride = 12, .step_func=SG_VERTEXSTEP_PER_INSTANCE },
                 [MATERIAL_I] =  { .stride = 12, .step_func=SG_VERTEXSTEP_PER_INSTANCE },
                 [TRANSFORM_I] = { .stride = 64, .step_func=SG_VERTEXSTEP_PER_INSTANCE }
             },
@@ -29437,7 +29514,7 @@ sg_pipeline init_scene_pipeline(int32_t sample_count) {
                 [NORMAL_I] =        { .buffer_index=NORMAL_I, .offset=0,  .format=SG_VERTEXFORMAT_FLOAT3 },
 
                 /* Color buffer (per instance) */
-                [COLOR_I] =         { .buffer_index=COLOR_I, .offset=0, .format=SG_VERTEXFORMAT_FLOAT4 },
+                [COLOR_I] =         { .buffer_index=COLOR_I, .offset=0, .format=SG_VERTEXFORMAT_FLOAT3 },
 
                 /* Material buffer (per instance) */
                 [MATERIAL_I] =      { .buffer_index=MATERIAL_I, .offset=0, .format=SG_VERTEXFORMAT_FLOAT3 },
@@ -29525,27 +29602,27 @@ void sokol_update_scene_pass(
 static
 void scene_draw_instances(
     SokolGeometry *geometry,
-    sokol_instances_t *instances,
+    sokol_geometry_buffers_t *buffers,
     sg_image shadow_map)
 {
-    if (!instances->instance_count) {
+    if (!buffers->instance_count) {
         return;
     }
 
     sg_bindings bind = {
         .vertex_buffers = {
-            [POSITION_I] =  geometry->vertex_buffer,
-            [NORMAL_I] =    geometry->normal_buffer,
-            [COLOR_I] =     instances->color_buffer,
-            [MATERIAL_I] =  instances->material_buffer,
-            [TRANSFORM_I] = instances->transform_buffer
+            [POSITION_I] =  geometry->vertices,
+            [NORMAL_I] =    geometry->normals,
+            [COLOR_I] =     buffers->colors,
+            [MATERIAL_I] =  buffers->materials,
+            [TRANSFORM_I] = buffers->transforms
         },
-        .index_buffer = geometry->index_buffer,
+        .index_buffer = geometry->indices,
         .fs_images[0] = shadow_map
     };
 
     sg_apply_bindings(&bind);
-    sg_draw(0, geometry->index_count, instances->instance_count);
+    sg_draw(0, geometry->index_count, buffers->instance_count);
 }
 
 void sokol_run_scene_pass(
@@ -29556,7 +29633,7 @@ void sokol_run_scene_pass(
     glm_mat4_copy(state->uniforms.mat_v, vs_u.mat_v);
     glm_mat4_copy(state->uniforms.mat_vp, vs_u.mat_vp);
     glm_mat4_copy(state->uniforms.light_mat_vp, vs_u.light_mat_vp);
-    
+
     scene_fs_uniforms_t fs_u;
     glm_vec3_copy(state->uniforms.light_ambient, fs_u.light_ambient);
     glm_vec3_copy(state->uniforms.light_direction, fs_u.light_direction);
@@ -29578,8 +29655,8 @@ void sokol_run_scene_pass(
 
         int b;
         for (b = 0; b < qit.count; b ++) {
-            scene_draw_instances(&geometry[b], &geometry[b].solid, state->shadow_map);
-            scene_draw_instances(&geometry[b], &geometry[b].emissive, state->shadow_map);
+            scene_draw_instances(&geometry[b], geometry[b].solid, state->shadow_map);
+            scene_draw_instances(&geometry[b], geometry[b].emissive, state->shadow_map);
         }
     }
     sg_end_pass();
@@ -29929,7 +30006,7 @@ ECS_COMPONENT_DECLARE(SokolRenderer);
 
 /* Static geometry/texture resources */
 static
-sokol_resources_t init_resources(void) {
+sokol_resources_t sokol_init_resources(void) {
     return (sokol_resources_t){
         .quad = sokol_buffer_quad(),
 
@@ -29947,7 +30024,7 @@ sokol_resources_t init_resources(void) {
 
 /* Light matrix (used for shadow map calculation) */
 static
-void init_light_mat_vp(
+void sokol_init_light_mat_vp(
     sokol_render_state_t *state)
 {
     mat4 mat_p;
@@ -29978,7 +30055,7 @@ void init_light_mat_vp(
 
 /* Compute uniform values for camera & light that are used across shaders */
 static
-void init_global_uniforms(
+void sokol_init_global_uniforms(
     sokol_render_state_t *state)
 {
     /* Default camera parameters */
@@ -30086,6 +30163,7 @@ void SokolRender(ecs_iter_t *it) {
     /* Load active camera & light data from canvas */
     if (canvas->camera) {
         state.camera = ecs_get(world, canvas->camera, EcsCamera);
+        r->camera = canvas->camera;
     }
 
     state.ambient_light = canvas->ambient_light;
@@ -30093,8 +30171,8 @@ void SokolRender(ecs_iter_t *it) {
     if (canvas->directional_light) {
         state.light = ecs_get(world, canvas->directional_light, 
             EcsDirectionalLight);
-        init_light_mat_vp(&state);
-        sokol_run_shadow_pass(&r->shadow_pass, &state);  
+        // sokol_init_light_mat_vp(&state);
+        // sokol_run_shadow_pass(&r->shadow_pass, &state);  
     } else {
         /* Set default ambient light if nothing is configured */
         if (!state.ambient_light.r && !state.ambient_light.g && 
@@ -30105,7 +30183,7 @@ void SokolRender(ecs_iter_t *it) {
     }
 
     /* Compute uniforms that are shared between passes */
-    init_global_uniforms(&state);
+    sokol_init_global_uniforms(&state);
 
     /* Depth prepass for more efficient drawing */
     sokol_run_depth_pass(&r->depth_pass, &state);
@@ -30154,13 +30232,14 @@ void SokolInitRenderer(ecs_iter_t *it) {
     int h = sapp_height();
 
     sg_setup(&(sg_desc) {
-        .context.depth_format = SG_PIXELFORMAT_NONE
+        .context.depth_format = SG_PIXELFORMAT_NONE,
+        .buffer_pool_size = 16384
     });
 
     assert(sg_isvalid());
     ecs_trace("sokol: library initialized");
 
-    sokol_resources_t resources = init_resources();
+    sokol_resources_t resources = sokol_init_resources();
     sokol_offscreen_pass_t depth_pass;
     sokol_offscreen_pass_t scene_pass = sokol_init_scene_pass(
         canvas->background_color, w, h, 1, &depth_pass);
@@ -30218,11 +30297,11 @@ void FlecsSystemsSokolRendererImport(
         flecs.components.gui.Canvas, 
         [out] !flecs.systems.sokol.Renderer($));
 
-    /* Configure no_staging for SokolInitRenderer as it needs direct access to
+    /* Configure no_readonly for SokolInitRenderer as it needs direct access to
      * the world for creating queries */
     ecs_system(world, {
         .entity = SokolInitRenderer,
-        .no_staging = true
+        .no_readonly = true
     });
 
     /* System that cleans up renderer */
@@ -30265,13 +30344,13 @@ void SokolInitMaterials(ecs_iter_t *it) {
         int i;
         if (spec) {
             for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].material_id;
+                uint16_t id = mat[i].value;
                 materials->array[id].specular_power = spec[i].specular_power;
                 materials->array[id].shininess = spec[i].shininess;
             }
         } else {
             for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].material_id;
+                uint16_t id = mat[i].value;
                 materials->array[id].specular_power = 0;
                 materials->array[id].shininess = 1.0;
             }            
@@ -30279,12 +30358,12 @@ void SokolInitMaterials(ecs_iter_t *it) {
 
         if (em) {
             for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].material_id;
+                uint16_t id = mat[i].value;
                 materials->array[id].emissive = em[i].value;
             }
         } else {
             for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].material_id;
+                uint16_t id = mat[i].value;
                 materials->array[id].emissive = 0;
             }
         }
@@ -30353,63 +30432,179 @@ ECS_COMPONENT_DECLARE(SokolGeometryQuery);
 
 ECS_DECLARE(SokolRectangleGeometry);
 ECS_DECLARE(SokolBoxGeometry);
-ECS_DECLARE(SokolBoxStaticGeometry);
+
+// Holds a linked list of buffers for geometry (box, rectangle)
+static
+sokol_geometry_buffers_t* sokol_create_buffers(void) {
+    sokol_geometry_buffers_t *result = ecs_os_calloc_t(sokol_geometry_buffers_t);
+    result->first = NULL;
+    ecs_map_init(&result->index, sokol_geometry_buffer_t*, NULL, 0);
+
+    flecs_allocator_init(&result->allocator);
+    ecs_vec_init_t(&result->allocator, &result->colors_data, ecs_rgb_t, 0);
+    ecs_vec_init_t(&result->allocator, &result->transforms_data, mat4, 0);
+    ecs_vec_init_t(&result->allocator, &result->materials_data, SokolMaterial, 0);
+
+    return result;
+}
+
+static
+void sokol_delete_buffers(sokol_geometry_buffers_t* result) {
+    result->first = NULL;
+
+    ecs_map_fini(&result->index);
+
+    sg_destroy_buffer(result->colors);
+    sg_destroy_buffer(result->transforms);
+    sg_destroy_buffer(result->materials);
+
+    ecs_vec_fini_t(&result->allocator, &result->colors_data, ecs_rgb_t);
+    ecs_vec_fini_t(&result->allocator, &result->transforms_data, mat4);
+    ecs_vec_fini_t(&result->allocator, &result->materials_data, SokolMaterial);
+    flecs_allocator_fini(&result->allocator);
+
+    ecs_os_free(result);
+}
+
+
+// The buffer type holds buffers managed by sokol that contain GPU data. A 
+// buffer instance is created for each world cell.
+//
+// A buffer contains a linked list of groups that belong to the world cell.
+// Groups hold all instances of a prefab in a specific world cell.
+static
+sokol_geometry_buffer_t* sokol_create_buffer(
+    ecs_world_t *world,
+    sokol_geometry_buffers_t *buffers,
+    ecs_entity_t buffer_id)
+{
+    sokol_geometry_buffer_t **ptr = ecs_map_ensure(&buffers->index, 
+        sokol_geometry_buffer_t*, buffer_id);
+    sokol_geometry_buffer_t *result = *ptr;
+    if (!result) {
+        result = *ptr = ecs_os_calloc_t(sokol_geometry_buffer_t);
+        sokol_geometry_buffer_t *next = buffers->first;
+        buffers->first = result;
+        result->next = next;
+        result->id = buffer_id;
+        if (buffer_id) {
+            buffer_id = ecs_get_alive(world, buffer_id);
+            result->cell_coord = ecs_ref_init(world, buffer_id, 
+                EcsWorldCellCoord);
+        }
+        if (next) {
+            next->prev = result;
+        }
+    }
+    return result;
+}
+
+static
+void sokol_delete_buffer(
+    sokol_geometry_buffers_t *buffers,
+    sokol_geometry_buffer_t *buffer)
+{
+    ecs_assert(buffer != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(buffers != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(buffer == ecs_map_get_ptr(&buffers->index, 
+        sokol_geometry_buffer_t*, buffer->id), 
+            ECS_INTERNAL_ERROR, NULL);
+
+    // Groups must have been cleaned up before buffer instance is deleted
+    ecs_assert(buffer->groups == NULL, ECS_INTERNAL_ERROR, NULL);
+
+    sokol_geometry_buffer_t *prev = buffer->prev, *next = buffer->next;
+    if (prev) {
+        prev->next = next;
+    }
+    if (next) {
+        next->prev = prev;
+    }
+
+    if (buffers->first == buffer) {
+        buffers->first = next;
+    }
+
+    ecs_map_remove(&buffers->index, buffer->id);
+    ecs_os_free(buffer);
+}
 
 ECS_CTOR(SokolGeometry, ptr, {
     *ptr = (SokolGeometry) {0};
+    ptr->solid = sokol_create_buffers();
+    ptr->emissive = sokol_create_buffers();
 })
-
-static 
-void free_buffer(sokol_instances_t *b) {
-    ecs_os_free(b->colors);
-    ecs_os_free(b->transforms);
-    ecs_os_free(b->materials);
-}
 
 ECS_DTOR(SokolGeometry, ptr, {
-    free_buffer(&ptr->solid);
-    free_buffer(&ptr->emissive);
-    free_buffer(&ptr->transparent);
+    sokol_delete_buffers(ptr->solid);
+    sokol_delete_buffers(ptr->emissive);
 })
 
 static
-void populate_rectangle(ecs_iter_t *qit, int32_t offset, mat4 *transforms) {
-    EcsRectangle *r = ecs_field(qit, EcsRectangle, 2);
+int32_t next_pow_of_2(
+    int32_t n)
+{
+    n --;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n ++;
 
+    return n;
+}
+
+// To ensure rectangles are of the right size, use the Rectangle component to
+// apply a scaling factor to the transform matrix that is sent to the GPU.
+static
+void sokol_populate_rectangle(
+    mat4 *transforms, 
+    EcsRectangle *data, 
+    int32_t count,
+    bool self) 
+{
     int i;
-    if (ecs_field_is_self(qit, 2)) {
-        for (i = 0; i < qit->count; i ++) {
-            vec3 scale = {r[i].width, r[i].height, 1.0};
-            glm_scale(transforms[offset + i], scale);
+    if (self) {
+        for (i = 0; i < count; i ++) {
+            vec3 scale = {data[i].width, data[i].height, 1.0};
+            glm_scale(transforms[i], scale);
         }
     } else {
-        vec3 scale = {r->width, r->height, 1.0};
-        for (i = 0; i < qit->count; i ++) {
-            glm_scale(transforms[offset + i], scale);
+        vec3 scale = {data->width, data->height, 1.0};
+        for (i = 0; i < count; i ++) {
+            glm_scale(transforms[i], scale);
         }
     }
 }
 
+// To ensure boxes are of the right size, use the Box component to apply
+// a scaling factor to the transform matrix that is sent to the GPU.
 static
-void populate_box(ecs_iter_t *qit, int32_t offset, mat4 *transforms) {
-    EcsBox *b = ecs_field(qit, EcsBox, 2);
-    
+void sokol_populate_box(
+    mat4 *transforms, 
+    EcsBox *data, 
+    int32_t count,
+    bool self)
+     
+{    
     int i;
-    if (ecs_field_is_self(qit, 2)) {
-        for (i = 0; i < qit->count; i ++) {
-            vec3 scale = {b[i].width, b[i].height, b[i].depth};
-            glm_scale(transforms[offset + i], scale);
+    if (self) {
+        for (i = 0; i < count; i ++) {
+            vec3 scale = {data[i].width, data[i].height, data[i].depth};
+            glm_scale(transforms[i], scale);
         }
     } else {
-        vec3 scale = {b->width, b->height, b->depth};
-        for (i = 0; i < qit->count; i ++) {
-            glm_scale(transforms[offset + i], scale);
+        vec3 scale = {data->width, data->height, data->depth};
+        for (i = 0; i < count; i ++) {
+            glm_scale(transforms[i], scale);
         }
     }
 }
 
+// Init static rectangle geometry data (vertices, indices)
 static
-void init_rect(
+void sokol_init_rectangle(
     ecs_world_t *world,
     sokol_resources_t *resources) 
 {
@@ -30417,15 +30612,16 @@ void init_rect(
         world, ecs_id(SokolRectangleGeometry), SokolGeometry);
     ecs_assert(g != NULL, ECS_INTERNAL_ERROR, NULL);
 
-    g->vertex_buffer = resources->rect;
-    g->normal_buffer = resources->rect_normals;
-    g->index_buffer = resources->rect_indices;
+    g->vertices = resources->rect;
+    g->normals = resources->rect_normals;
+    g->indices = resources->rect_indices;
     g->index_count = sokol_rectangle_index_count();
-    g->populate = populate_rectangle;
+    g->populate = (sokol_geometry_action_t)sokol_populate_rectangle;
 }
 
+// Init static box geometry data (vertices, indices)
 static
-void init_box(
+void sokol_init_box(
     ecs_world_t *world,
     sokol_resources_t *resources) 
 {
@@ -30434,23 +30630,11 @@ void init_box(
             world, ecs_id(SokolBoxGeometry), SokolGeometry);
         ecs_assert(g != NULL, ECS_INTERNAL_ERROR, NULL);
 
-        g->vertex_buffer = resources->box;
-        g->normal_buffer = resources->box_normals;
-        g->index_buffer = resources->box_indices;
+        g->vertices = resources->box;
+        g->normals = resources->box_normals;
+        g->indices = resources->box_indices;
         g->index_count = sokol_box_index_count();
-        g->populate = populate_box;
-    }
-
-    if (SokolBoxStaticGeometry) {
-        SokolGeometry *g = ecs_get_mut(
-            world, ecs_id(SokolBoxStaticGeometry), SokolGeometry);
-        ecs_assert(g != NULL, ECS_INTERNAL_ERROR, NULL);
-
-        g->vertex_buffer = resources->box;
-        g->normal_buffer = resources->box_normals;
-        g->index_buffer = resources->box_indices;
-        g->index_count = sokol_box_index_count();
-        g->populate = populate_box;
+        g->populate = (sokol_geometry_action_t)sokol_populate_box;
     }
 }
 
@@ -30458,154 +30642,512 @@ void sokol_init_geometry(
     ecs_world_t *world,
     sokol_resources_t *resources) 
 {
-    init_rect(world, resources);
-    init_box(world, resources);
+    sokol_init_rectangle(world, resources);
+    sokol_init_box(world, resources);
+}
+
+// Clear list of group ids that got changed in this frame
+static
+void sokol_groups_clear(
+    ecs_vec_t *vec)
+{
+    vec->count = 0;
+}
+
+// Add new element to changed group list.
+static
+uint64_t* sokol_groups_add(
+    ecs_vec_t *vec)
+{
+    if (vec->count == vec->size) {
+        vec->size = ECS_MAX(vec->size * 2, 8);
+        vec->array = ecs_os_realloc_n(vec->array, uint64_t, vec->size);
+    }
+
+    uint64_t *result = &((uint64_t*)vec->array)[vec->count];
+    vec->count ++;
+    return result;
+}
+
+// Add a page to a group. A page is a fixed size application buffer that data 
+// from ECS tables is copied into. Groups/pages are only updated when ECS data
+// changes.
+// By storing a copy of the data outside of the ECS the renderer can quickly
+// enable/disable groups depending on visibility without having to iterate
+// (potentially many) tables.
+// Having a copy of the data also makes it easier in the future to multithread
+// the render code.
+static
+sokol_geometry_page_t* sokol_group_add_page(
+    sokol_geometry_group_t *group)
+{
+    sokol_geometry_page_t *page = ecs_os_calloc_t(sokol_geometry_page_t);
+    page->colors = ecs_os_calloc_n(ecs_rgb_t, SOKOL_GEOMETRY_PAGE_SIZE);
+    page->transforms = ecs_os_calloc_n(mat4, SOKOL_GEOMETRY_PAGE_SIZE);
+    page->materials = ecs_os_calloc_n(SokolMaterial, SOKOL_GEOMETRY_PAGE_SIZE);
+
+    if (!group->first_page) {
+        ecs_assert(!group->last_page, ECS_INTERNAL_ERROR, NULL);
+        group->first_page = page;
+        group->last_page = page;
+    } else {
+        group->last_page->next = page;
+        group->last_page = page;
+    }
+
+    return page;
+}
+
+int32_t sokol_page_space_left(
+    sokol_geometry_page_t *page)
+{
+    return SOKOL_GEOMETRY_PAGE_SIZE - page->count;
 }
 
 static
-void populate_buffer(
-    SokolGeometry *geometry,
-    sokol_instances_t *instances,
-    ecs_query_t *query)
+int64_t sokol_sqr(int64_t v) {
+    return v * v;
+}
+
+static
+int64_t sokol_abs(int64_t v) {
+    static const int SOKOL_CHAR_BIT = 8;
+    int64_t mask = v >> (sizeof(int64_t) * SOKOL_CHAR_BIT - 1);
+    return (v + mask) ^ mask;
+}
+
+// Iterate a query group, check if it contains any chagned tables. If at least
+// one table has changed, add the group to the changed list. This list will be
+// used later on to populate the GPU buffers.
+static
+void sokol_group_add_changed(
+    const ecs_world_t *world,
+    ecs_query_t *query,
+    ecs_vec_t *group_ids,
+    uint64_t group_id)
 {
-    if (ecs_query_changed(query, 0)) {
-        const ecs_world_t *world = ecs_get_world(query);
-        ecs_iter_t qit = ecs_query_iter(world, query);
-        bool changed = false;
+    const ecs_query_group_info_t *gi = ecs_query_get_group_info(query, group_id);
+    if (!gi) {
+        return;
+    }
 
-        /* Count number of instances to ensure GPU buffers are big enough */
-        int32_t count = 0;
-        while (ecs_query_next(&qit)) {
-            count += qit.count;
-            if (ecs_query_changed(query, &qit)) {
-                changed = true;
-            }
-        }
+    // If tables got added/removed to the group, it has changed
+    sokol_geometry_group_t *group = gi->ctx;
+    if (group->match_count != gi->match_count) {
+        sokol_groups_add(group_ids)[0] = group_id;
+        group->match_count = gi->match_count;
+        return;
+    }
 
-        if (!changed) {
+    ecs_iter_t qit = ecs_query_iter(world, query);
+    ecs_query_set_group(&qit, group_id);
+
+    while (ecs_query_next_table(&qit)) {
+        if (ecs_query_changed(NULL, &qit)) {
+            // At least one table has changed in the group, add it
+            sokol_groups_add(group_ids)[0] = group_id;
+            ecs_iter_fini(&qit);
             return;
-        }
-
-        if (!count) {
-            instances->instance_count = 0;
-        } else {
-            if (count == 1) {
-                /* Instanced pipelines can't work with single instance */
-                count ++;
-            }
-
-            /* Fetch materials buffer */
-            const SokolMaterials *render_materials = ecs_get(
-                world, SokolRendererInst, SokolMaterials);
-
-            /* Make sure application buffers are large enough */
-            ecs_rgba_t *colors = instances->colors;
-            mat4 *transforms = instances->transforms;
-            SokolMaterial *materials = instances->materials;
-
-            int colors_size = count * sizeof(ecs_rgba_t);
-            int transforms_size = count * sizeof(EcsTransform3);
-            int materials_size = count * sizeof(SokolMaterial);
-
-            int32_t instance_count = instances->instance_count;
-            int32_t instance_max = instances->instance_max;
-
-            if (instance_count < count) {
-                ecs_os_free(colors);
-                ecs_os_free(transforms);
-                ecs_os_free(materials);
-                colors = ecs_os_calloc(colors_size);
-                transforms = ecs_os_calloc(transforms_size);
-                materials = ecs_os_calloc(materials_size);
-            }
-
-            /* Copy data into application buffers */
-            int32_t cursor = 0;
-            int i;
-
-            ecs_iter_t qit = ecs_query_iter(world, query);
-            while (ecs_query_next(&qit)) {
-                EcsTransform3 *t = ecs_field(&qit, EcsTransform3, 1);
-                SokolMaterialId *mat = ecs_field(&qit, SokolMaterialId, 3);
-                EcsRgb *c = ecs_field(&qit, EcsRgb, 5);
-
-                if (ecs_field_is_self(&qit, 5)) {
-                    for (i = 0; i < qit.count; i ++) {
-                        colors[cursor + i].r = c[i].r;
-                        colors[cursor + i].g = c[i].g;
-                        colors[cursor + i].b = c[i].b;
-                        colors[cursor + i].a = 0;
-                    }
-                } else {
-                    for (i = 0; i < qit.count; i ++) {
-                        colors[cursor + i].r = c->r;
-                        colors[cursor + i].g = c->g;
-                        colors[cursor + i].b = c->b;
-                        colors[cursor + i].a = 0;
-                    }
-                }
-
-                if (mat) {
-                    uint16_t material_id = mat->material_id;
-                    for (i = 0; i < qit.count; i ++) {
-                        materials[cursor + i] = 
-                            render_materials->array[material_id];
-                    }
-                } else {
-                    memset(&materials[cursor], 0, qit.count * sizeof(uint32_t));
-                }
-
-                memcpy(&transforms[cursor], t, qit.count * sizeof(mat4));
-
-                ecs_assert(geometry->populate != NULL, ECS_INTERNAL_ERROR, NULL);
-                geometry->populate(&qit, cursor, transforms);
-                cursor += qit.count;
-            }
-
-            instances->colors = colors;
-            instances->transforms = transforms;
-            instances->materials = materials;
-            instances->instance_count = count;
-
-            if (count > instance_max) {
-                if (instance_max) {                    
-                    sg_destroy_buffer(instances->color_buffer);
-                    sg_destroy_buffer(instances->transform_buffer);
-                    sg_destroy_buffer(instances->material_buffer);
-                }
-
-                while (count > instance_max) {
-                    if (!instance_max) {
-                        instance_max = 1;
-                    }
-                    instance_max *= 2;
-                }
-
-                instances->color_buffer = sg_make_buffer(&(sg_buffer_desc){
-                    .size = instance_max * sizeof(ecs_rgba_t),
-                    .usage = SG_USAGE_STREAM
-                });
-
-                instances->transform_buffer = sg_make_buffer(&(sg_buffer_desc){
-                    .size = instance_max * sizeof(EcsTransform3),
-                    .usage = SG_USAGE_STREAM
-                });
-
-                instances->material_buffer = sg_make_buffer(&(sg_buffer_desc){
-                    .size = instance_max * sizeof(SokolMaterial),
-                    .usage = SG_USAGE_STREAM
-                });
-
-                instances->instance_max = instance_max;
-            }
-
-            sg_update_buffer(instances->color_buffer, &(sg_range){colors, colors_size});
-            sg_update_buffer(instances->transform_buffer, &(sg_range){transforms, transforms_size});
-            sg_update_buffer(instances->material_buffer, &(sg_range){materials, materials_size});
         }
     }
 }
 
+// Append all groups in a buffer with changed data to the changed group list
+static
+void sokol_groups_add_changed(
+    const ecs_world_t *world,
+    ecs_query_t *query,
+    ecs_vec_t *group_ids,
+    sokol_geometry_buffer_t *buffer)
+{
+    // Check all groups for geometry for changes
+    sokol_geometry_group_t *group = buffer->groups;
+    while (group) {
+        sokol_group_add_changed(world, query, group_ids, group->id);
+        group = group->next;
+    }
+}
+
+// Determine visibility for all groups in a buffer.
+static
+void sokol_update_visibility(
+    const ecs_world_t *world,
+    sokol_geometry_buffer_t *buffer,
+    const EcsPosition3 *view_pos_ptr,
+    ecs_query_t *query,
+    ecs_vec_t *group_ids)
+{
+    // First find the world cell metadata associated with this buffer.
+    const EcsWorldCellCoord *cell = NULL;
+    if (buffer->cell_coord.entity) {
+        cell = ecs_ref_get(world, &buffer->cell_coord, EcsWorldCellCoord);
+    }
+    if (!cell) {
+        // Entities without a world cell are always visible, so check if group
+        // data changed.
+        sokol_groups_add_changed(world, query, group_ids, buffer);
+        return;
+    }
+
+    EcsPosition3 view_pos = {0};
+    if (view_pos_ptr) {
+        view_pos = *view_pos_ptr; 
+    }
+
+    // Compute distance from camera to the center of the world cell. This is
+    // used to do broad phase elimination of groups, not individual entities.
+    int64_t view_x = view_pos.x;
+    int64_t view_z = view_pos.z;
+    int64_t cell_x = cell->x;
+    int64_t cell_y = cell->y;
+    int64_t cell_size = cell->size / 2;
+
+    int64_t dx = sokol_abs(view_x - cell_x);
+    dx -= cell_size;
+    dx *= (dx > 0);
+    int64_t dz = sokol_abs(view_z - cell_y);
+    dz -= cell_size;
+    dz *= (dz > 0);
+    int64_t dy = sokol_abs(view_pos.y);
+    dy -= cell_size;
+    dy *= (dy > 0);
+    int64_t d_sqr = sokol_sqr(dx) + sokol_sqr(dy) + sokol_sqr(dz);
+
+    // Iterate groups in buffer, find the ones for which visibility changed.
+    sokol_geometry_group_t *group = buffer->groups;
+    while (group) {
+        if (!group->draw_distance.entity) {
+            // Group has no draw distance specified, always draw.
+            ecs_assert(group->visible == true, ECS_INTERNAL_ERROR, NULL);
+            sokol_group_add_changed(world, query, group_ids, group->id);
+            group = group->next;
+            continue;
+        }
+
+        const EcsDrawDistance *vd = ecs_ref_get(world, &group->draw_distance, 
+            EcsDrawDistance);
+        if (!vd) {
+            // This should never happen, but don't crash.
+            ecs_assert(group->visible == true, ECS_INTERNAL_ERROR, NULL);
+            sokol_group_add_changed(world, query, group_ids, group->id);
+            group = group->next;
+            continue;
+        }
+
+        // Test if visibility of group has changed.
+        float draw_distance_sqr = sokol_sqr(vd->far_);
+        bool visible = d_sqr < draw_distance_sqr;
+        bool changed = visible != group->visible;
+
+        // If visibility of a group has changed (either it became visible or
+        // invisible) flag that the buffers for this world cell need to be
+        // repopulated.
+        buffer->changed |= changed;
+
+        // If visibility changed, update the instance count for the buffer. This
+        // is kept up to date so that the code that populates the buffers knows
+        // in advance whether the sokol/GPU buffers need to be resized.
+        group->visible = visible;
+        if (visible) {
+            // Only check if the group has changed data if it's visible. This
+            // lets us have large dynamic scenes, while only updating GPU data
+            // with entities that changed *and* are visible.
+            sokol_group_add_changed(world, query, group_ids, group->id);
+        }
+
+        group = group->next;
+    }
+}
+
+// A group contains instances for a prefab in a specific world cell. This
+// function is called if a change was detected for the data (tables) contained
+// by the group, and copies data from tables into group pages.
+static
+void sokol_update_group(
+    const ecs_world_t *world,
+    const  SokolMaterial *material_data,
+    SokolGeometry *geometry,
+    ecs_query_t *query,
+    uint64_t group_id)
+{
+    // Get the group context from the query. This context is created by the
+    // sokol_on_group_create function.
+    const ecs_query_group_info_t *gi = ecs_query_get_group_info(query, group_id);
+    sokol_geometry_group_t *group = gi->ctx;
+    if (!group->visible) {
+        // Ignore if the group is not visible.
+        return;
+    }
+
+    sokol_geometry_buffer_t *buffer = group->buffer;
+    ecs_assert(buffer != NULL, ECS_INTERNAL_ERROR, NULL);
+    sokol_geometry_page_t *page = group->first_page;
+    if (!page) {
+        // If the group didn't contain any pages, create one
+        page = sokol_group_add_page(group);
+    } else {
+        // If the group does contain pages clear the content
+        page->count = 0;
+    }
+
+    group->count = 0;
+
+    // Iterate all tables for this group
+    ecs_iter_t qit = ecs_query_iter(world, query);
+    ecs_query_set_group(&qit, group_id);
+    while (ecs_query_next(&qit)) {
+        // Copy component data to group pages
+        EcsTransform3 *transforms = ecs_field(&qit, EcsTransform3, 1);
+        EcsRgb *colors = ecs_field(&qit, EcsRgb, 2);
+        SokolMaterialId *materials = ecs_field(&qit, SokolMaterialId, 3);
+        void *geometry_data = ecs_field_w_size(&qit, 0, 4);
+        bool geometry_self = ecs_field_is_self(&qit, 4);
+        ecs_size_t geometry_size = ecs_field_size(&qit, 4);
+
+        int32_t remaining = qit.count;
+        group->count += qit.count;
+
+        do {
+            int32_t space_left = sokol_page_space_left(page);
+            if (!space_left) {
+                // Reuse existing pages if they exist
+                page = page->next;
+                if (!page) {
+                    // New page needs to be allocated
+                    page = sokol_group_add_page(group);
+                } else {
+                    // Reset contents of existing page
+                    page->count = 0;
+                }
+                space_left = SOKOL_GEOMETRY_PAGE_SIZE;
+            }
+
+            int32_t to_copy = ECS_MIN(space_left, remaining);
+            int32_t i, pstart = page->count;
+
+            // Copy transform data
+            ecs_os_memcpy_n(&page->transforms[pstart], transforms, mat4, to_copy);
+            transforms += to_copy;
+
+            // Copy color data
+            if (ecs_field_is_self(&qit, 2)) {
+                ecs_os_memcpy_n(&page->colors[pstart], colors, ecs_rgb_t, to_copy);
+                colors += to_copy;
+            } else {
+                // Shared color component, copy shared value to all elements
+                for (i = 0; i < to_copy; i ++) {
+                    page->colors[pstart + i] = *colors;
+                }
+            }
+
+            // Uncomment to use group id as vertex color
+            // for (i = 0; i < to_copy; i ++) {
+            //     page->colors[pstart + i].r = 0.1 + ((float)(group_id % 7)) / 7.0;
+            //     page->colors[pstart + i].g = 0;
+            //     page->colors[pstart + i].b = 0.3 + ((float)(group_id % 11)) / 11.0;
+            // }
+
+            // Copy material data
+            if (materials) {
+                uint64_t material_id = materials->value;
+                for (i = 0; i < to_copy; i ++) {
+                    // Fetch material data from material array. We can't pass 
+                    // the material index/array to the shader as this is not
+                    // supported by WebGL.
+                    page->materials[pstart + i] = material_data[material_id];
+                }
+            } else {
+                ecs_os_memset_n(&page->materials[pstart], 0, 
+                    SokolMaterial, to_copy);
+            }
+
+            // Apply geometry-specific scaling to transform matrix
+            geometry->populate(&page->transforms[pstart], geometry_data, 
+                to_copy, geometry_self);
+            geometry_data = ECS_OFFSET(geometry_data, geometry_size * to_copy);
+
+            remaining -= to_copy;
+            page->count += to_copy;
+        } while(remaining);
+    }
+
+    // TODO: instanced draw calls can't work with single instances
+    if (group->count == 1) { }
+
+    // Store first page that doesn't contain data for current frame. This way
+    // we can reuse pages that are not used this frame, while letting the
+    // buffer code know where to stop iterating the group.
+    group->first_no_data = page->next;
+
+    // Flag buffer as changed
+    buffer->changed = true;
+}
+
+// Update buffer data. A buffer holds all the data for a world cell.
+static
+void sokol_update_buffer(
+    const ecs_world_t *world,
+    sokol_geometry_buffers_t *buffers,
+    sokol_geometry_buffer_t *buffer)
+{
+    ecs_allocator_t *a = &buffers->allocator;
+    ecs_vec_t *colors_data = &buffers->colors_data;
+    ecs_vec_t *transforms_data = &buffers->transforms_data;
+    ecs_vec_t *materials_data = &buffers->materials_data;
+
+    // Copy data from groups to temporary buffers before copying to sokol buffers
+    sokol_geometry_group_t *group = buffer->groups;
+    while (group) {
+        if (!group->visible) {
+            // Skip groups that aren't visible
+            group = group->next;
+            continue;
+        }
+
+        sokol_geometry_page_t *end = group->first_no_data;
+        sokol_geometry_page_t *page = group->first_page;
+        int32_t group_count = 0;
+
+        // Iterate until the last page with data for this frame was found
+        while (page != end) {
+            int32_t count = page->count;
+
+            ecs_os_memcpy_n( ecs_vec_grow_t(a, colors_data, ecs_rgb_t, count),
+                page->colors, ecs_rgb_t, count);
+            ecs_os_memcpy_n( ecs_vec_grow_t(a, transforms_data, mat4, count),
+                page->transforms, mat4, count);
+            ecs_os_memcpy_n( ecs_vec_grow_t(a, materials_data, SokolMaterial, count),
+                page->materials, SokolMaterial, count);
+
+            group_count += count;
+            page = page->next;
+        }
+
+        // Sanity check to make sure groups correctly updated their count
+        if (group_count != group->count) {
+            char *str = ecs_id_str(world, group->id);
+            ecs_err("group %s reports incorrect number of instances (%d vs %d)",
+                str, group_count, group->count);
+            ecs_os_free(str);
+        }
+
+        group = group->next;
+    }
+}
+
+// Main function that populates GPU buffers with ECS data. Each set of geometry
+// data is described by an ECS query. Because iterating all matching tables in
+// the query could be too expensive for large scenes, this code uses a few
+// techniques that reduces the number of tables to iterate by a lot.
+//
+// The query uses the group_by feature to organize matched tables into different
+// groups. A group is identified by a unique 64bit id. The group_by function for
+// the geometry query combines the world cell and (optional) prefab id (see the
+// sokol_group_by function for more details).
+//
+// The code registers callbacks with the query that are invoked when groups are
+// created and deleted to build up a data structure that stores a list of query
+// groups, grouped by world cell (sokol_geometry_buffer_t).
+//
+// This function first iterates the world cells to find the ones that contain
+// visible groups. Visibility is determined by an optional DrawDistance 
+// component on a prefab. This means that world cells can contain groups with
+// different draw distances, which is useful when rendering both large and
+// small entities.
+//
+// When group visibility changes, the buffer (world cell) is marked as dirty.
+// For each visible group the code will check if it contains changed data 
+// (position, rotation, scale, color) with the query change tracking feature.
+// If data did change, the buffer (world cell) is marked dirty.
+//
+// The code then iterates all dirty world cells, and rebuild the GPU buffer 
+// data. This is a fast process as the data is already stored in a list of 
+// contiguous buffers (pages) for each group.
+static
+void sokol_populate_buffers(
+    SokolGeometry *geometry,
+    sokol_geometry_buffers_t *buffers,
+    ecs_query_t *query,
+    const EcsPosition3 *view_pos)
+{
+    const ecs_world_t *world = ecs_get_world(query);
+    ecs_allocator_t *a = &buffers->allocator;
+
+    // Vector to keep track of changed group ids
+    ecs_vec_t *group_ids = &geometry->group_ids;
+    sokol_groups_clear(group_ids);
+
+    // Compute group visibility for all buffers
+    {
+        sokol_geometry_buffer_t *buffer = buffers->first;
+        while (buffer) {
+            sokol_update_visibility(world, buffer, view_pos, query, group_ids);
+            buffer = buffer->next;
+        }
+    }
+
+    // Update data for groups that changed and are visible
+    int32_t i, count = group_ids->count;
+    if (count) {
+        const SokolMaterials *materials = ecs_get(
+            world, SokolRendererInst, SokolMaterials);
+        const SokolMaterial *material_data = materials->array;
+        uint64_t *array = group_ids->array;
+        for (i = 0; i < count; i ++) {
+            sokol_update_group(world, material_data, geometry, query, array[i]);
+        }
+    }
+
+    // Collect data from buffers
+    ecs_size_t old_size = ecs_vec_size(&buffers->colors_data);
+    {
+        ecs_vec_reset_t(a, &buffers->colors_data, ecs_rgb_t);
+        ecs_vec_reset_t(a, &buffers->transforms_data, mat4);
+        ecs_vec_reset_t(a, &buffers->materials_data, SokolMaterial);
+
+        sokol_geometry_buffer_t *buffer = buffers->first;
+        while (buffer) {
+            sokol_update_buffer(world, buffers, buffer);
+            buffer = buffer->next;
+        }
+    }
+
+    // Populate sokol buffers
+    {
+        ecs_size_t new_size = ecs_vec_size(&buffers->colors_data);
+        if (new_size != old_size) {
+            if (old_size) {
+                sg_destroy_buffer(buffers->colors);
+                sg_destroy_buffer(buffers->transforms);
+                sg_destroy_buffer(buffers->materials);
+            }
+
+            buffers->colors = sg_make_buffer(&(sg_buffer_desc){
+                .size = new_size * sizeof(ecs_rgb_t), .usage = SG_USAGE_STREAM });
+            buffers->transforms = sg_make_buffer(&(sg_buffer_desc){
+                .size = new_size * sizeof(EcsTransform3), .usage = SG_USAGE_STREAM });
+            buffers->materials = sg_make_buffer(&(sg_buffer_desc){
+                .size = new_size * sizeof(SokolMaterial), .usage = SG_USAGE_STREAM });
+        }
+
+        buffers->instance_count = ecs_vec_count(&buffers->colors_data);
+
+        if (buffers->instance_count > 0) {
+            sg_update_buffer(buffers->colors, &(sg_range) {
+                ecs_vec_first_t(&buffers->colors_data, ecs_rgb_t), 
+                    buffers->instance_count * sizeof(ecs_rgb_t) } );
+            sg_update_buffer(buffers->transforms, &(sg_range) {
+                ecs_vec_first_t(&buffers->transforms_data, mat4), 
+                    buffers->instance_count * sizeof(mat4) } );
+            sg_update_buffer(buffers->materials, &(sg_range) {
+                ecs_vec_first_t(&buffers->materials_data, SokolMaterial), 
+                    buffers->instance_count * sizeof(SokolMaterial) } );
+        }
+    }
+}
+
+// System that matches all geometry kinds & calls the function to update GPU
+// buffers with ECS data.
 static
 void SokolPopulateGeometry(
     ecs_iter_t *it) 
@@ -30613,74 +31155,214 @@ void SokolPopulateGeometry(
     SokolGeometry *g = ecs_field(it, SokolGeometry, 1);
     SokolGeometryQuery *q = ecs_field(it, SokolGeometryQuery, 2);
 
+    // Get current camera position so we can calculate view distance
+    const EcsPosition3 *view_pos = NULL;
+    ecs_world_t *world = it->real_world;
+    const SokolRenderer *r = ecs_get(world, SokolRendererInst, SokolRenderer);
+    ecs_entity_t camera = r->camera;
+    if (camera) {
+        view_pos = ecs_get(world, camera, EcsPosition3);
+    } else {
+        // Wait until renderer has populated camera field
+        return;
+    }
+
     int i;
     for (i = 0; i < it->count; i ++) {
-        populate_buffer(&g[i], &g[i].solid, q[i].solid);
-        populate_buffer(&g[i], &g[i].emissive, q[i].emissive);
-        populate_buffer(&g[i], &g[i].transparent, q[i].transparent);
+        // Solid and emissive objects are split up, so we can treat emissive
+        // objects differently, for example when doing shadow mapping.
+        sokol_populate_buffers(&g[i], g[i].solid, q[i].solid, view_pos);
+        sokol_populate_buffers(&g[i], g[i].emissive, q[i].emissive, view_pos);
     }
+}
+
+// Callback that's invoked when a new group is created in the query.
+static
+void* sokol_on_group_create(
+    ecs_world_t *world,
+    uint64_t group_id,
+    void *group_by_ctx)
+{
+    sokol_geometry_buffers_t *buffers = group_by_ctx;
+    ecs_entity_t buffer_id = ECS_PAIR_FIRST(group_id); // world cell
+    ecs_entity_t prefab = ECS_PAIR_SECOND(group_id);
+
+    // Find or create a buffer for the world cell.
+    sokol_geometry_buffer_t *buffer = sokol_create_buffer(
+        world, buffers, buffer_id);
+
+    sokol_geometry_group_t *result = ecs_os_calloc_t(sokol_geometry_group_t);
+    result->buffer = buffer;
+    result->id = group_id;
+
+    // Add the group to the linked list of groups for the world cell.
+    sokol_geometry_group_t *next = buffer->groups;
+    buffer->groups = result;
+    result->next = next;
+    if (next) {
+        next->prev = result;
+    }
+    
+    // Mark buffer as changed so new group gets added to buffers
+    buffer->changed = true;
+
+    // If the group contains prefab instances, check if the prefab has a
+    // DrawDistance component. If it does, it will be used to determine group
+    // visibility based on camera distance. If the prefab/group does not have
+    // a DrawDistance component it is always visible.
+    if (prefab) {
+        prefab = ecs_get_alive(world, prefab);
+        result->draw_distance = ecs_ref_init(world, prefab, EcsDrawDistance);
+    }
+
+    result->visible = true;
+
+    return result;
+}
+
+// Callback that's invoked when a group is deleted by a query.
+static
+void sokol_on_group_delete(
+    ecs_world_t *world,
+    uint64_t group_id,
+    void *group_ctx,
+    void *group_by_ctx)
+{
+    sokol_geometry_group_t *group = group_ctx;
+    sokol_geometry_buffers_t *buffers = group_by_ctx;
+    sokol_geometry_buffer_t *buffer = group->buffer;
+    
+    sokol_geometry_group_t *prev = group->prev, *next = group->next;
+    if (prev) {
+        prev->next = next;
+    }
+    if (next) {
+        next->prev = prev;
+    }
+
+    // Mark buffer as changed so group gets removed from buffers
+    buffer->changed = true;
+
+    if (buffer->groups == group) {
+        buffer->groups = next;
+        if (!next) {
+            // Last group for buffer was deleted, delete buffer
+            sokol_delete_buffer(buffers, buffer);
+        }
+    }
+
+    // Cleanup pages
+    sokol_geometry_page_t *next_page, *page = group->first_page;
+    while (page != NULL) {
+        next_page = page->next;
+        ecs_os_free(page->colors);
+        ecs_os_free(page->transforms);
+        ecs_os_free(page->materials);
+        ecs_os_free(page);
+        page = next_page;
+    }
+
+    ecs_os_free(group);
+}
+
+static
+uint64_t sokol_group_by(
+    ecs_world_t *world, 
+    ecs_table_t *table, 
+    ecs_id_t id, 
+    void *ctx)
+{
+    ecs_entity_t src = 0, prefab = 0, cell = 0;
+    ecs_id_t match;
+
+    /* Group by prefab & world cell. Prefer prefabs with DrawDistance, in case
+     * an entity inherits from multiple prefabs. */
+
+    /* First, try to find a parent that has (or inherits) DrawDistance. */
+    if (ecs_search_relation(world, table, 0, ecs_id(EcsDrawDistance), EcsChildOf,
+        EcsUp, &src, 0, 0) != -1)
+    {
+        prefab = src;
+    } else {
+        /* If no parent with DrawDistance is found, check if table inherits
+         * DrawDistance directly */
+        if (ecs_search_relation(world, table, 0, ecs_id(EcsDrawDistance), EcsIsA,
+            EcsUp, &src, 0, 0) != -1)
+        {
+            prefab = src;
+        } else {
+            /* If no prefab with DrawDistance was found, select any prefab. Use
+             * ChildOf to look for prefab relationships, as instance children
+             * are not created with an IsA relationship. */
+            if (ecs_search_relation(world, table, 0, ecs_pair(id, EcsWildcard), 
+                EcsChildOf, EcsSelf|EcsUp, 0, &match, 0) != -1)
+            {
+                prefab = ECS_PAIR_SECOND(match);
+            }
+        }
+    }
+
+    /* Find world cell. World cells are only added to top-level entities that
+     * have a Position component, so for instance children we'll have to find 
+     * the world cell by traversing the ChildOf relationship. */
+    if (ecs_search_relation(world, table, 0, 
+        ecs_pair(EcsWorldCell, EcsWildcard), EcsChildOf,
+        EcsSelf | EcsUp, 0, &match, 0) != -1)
+    {
+        cell = ECS_PAIR_SECOND(match);
+    }
+
+    return ecs_pair(cell, prefab);
 }
 
 static
 void CreateGeometryQueries(ecs_iter_t *it) {
     ecs_world_t *world = it->world;
-    SokolGeometryQuery *sb = ecs_field(it, SokolGeometryQuery, 1);
+    SokolGeometry *g = ecs_field(it, SokolGeometry, 1);
+    SokolGeometryQuery *gq = ecs_field(it, SokolGeometryQuery, 2);
 
     int i;
     for (i = 0; i < it->count; i ++) {
-        char *comp_path = ecs_get_fullpath(world, sb[i].component);
-        char expr[255], subexpr[512];
-        sprintf(expr, 
-            "[in] flecs.components.transform.Transform3,"
-            "[in] %s(self|up),"
-            "[in] ?flecs.systems.sokol.MaterialId(up)",
-                comp_path);
-        ecs_os_free(comp_path);
+        // Geometry query that includes all components that are copied (or used
+        // to find data to copy) to GPU buffers.
+        ecs_query_desc_t desc = {
+            .filter = {
+                .terms = {{
+                    .id        = ecs_id(EcsTransform3), 
+                    .inout     = EcsIn,
+                    .src.flags = EcsSelf
+                }, {
+                    .id        = ecs_id(EcsRgb),
+                    .inout     = EcsIn
+                }, {
+                    .id        = ecs_id(SokolMaterialId), 
+                    .oper      = EcsOptional,
+                    .inout     = EcsIn,
+                    .src.flags = EcsUp
+                }, {
+                    .id        = gq[i].component, 
+                    .inout     = EcsIn 
+                }, {
+                    .id        = ecs_id(EcsEmissive),
+                    .inout     = EcsInOutNone,
+                    .oper      = EcsNot
+                }},
+                .instanced = true
+            },
+            .group_by_id = EcsIsA,
+            .group_by = sokol_group_by,
+            .on_group_create = sokol_on_group_create,
+            .on_group_delete = sokol_on_group_delete
+        };
 
-        if (sb[i].static_geometry) {
-            strcat(expr, ", flecs.components.geometry.StaticGeometry");
-        } else {
-            strcat(expr, ", !flecs.components.geometry.StaticGeometry");
-        }
+        /* Query for solid, non-emissive objects */
+        desc.group_by_ctx = g[i].solid;
+        gq[i].solid = ecs_query_init(world, &desc);
 
-        sb[i].parent_query = ecs_query(world, {
-            .filter.expr = expr,
-            .filter.instanced = true
-        });
-
-        sprintf(subexpr, 
-            "%s,"
-            "[in] flecs.components.graphics.Rgb(self|up),"
-            "[in] !flecs.components.graphics.Emissive(up),"
-            "[in] !flecs.components.graphics.Rgba(self|up)", 
-                expr);
-        sb[i].solid = ecs_query(world, {
-            .filter.expr = subexpr,
-            .filter.instanced = true,
-            .parent = sb[i].parent_query,
-        });
-
-        sprintf(subexpr, 
-            "%s,"
-            "[in] flecs.components.graphics.Rgb(self|up),"
-            "[in] flecs.components.graphics.Emissive(up),"
-            "[in] !flecs.components.graphics.Rgba(self|up)", expr);
-        sb[i].emissive = ecs_query(world, {
-            .filter.expr = subexpr,
-            .filter.instanced = true,
-            .parent = sb[i].parent_query
-        });
-
-        sprintf(subexpr,
-            "%s,"
-            "[in] !flecs.components.graphics.Rgb(self|up),"
-            "[in] flecs.components.graphics.Emissive(self|up),"
-            "[in] flecs.components.graphics.Rgba(self|up)", expr);
-        sb[i].transparent = ecs_query(world, {
-            .filter.expr = subexpr,
-            .filter.instanced = true,
-            .parent = sb[i].parent_query
-        });
+        /* Query for solid, emissive objects */
+        desc.group_by_ctx = g[i].emissive;
+        desc.filter.terms[4].oper = 0; /* Remove Not operator */
+        gq[i].emissive = ecs_query_init(world, &desc);
     }
 }
 
@@ -30691,6 +31373,7 @@ void FlecsSystemsSokolGeometryImport(
     ECS_IMPORT(world, FlecsComponentsTransform);
     ECS_IMPORT(world, FlecsComponentsGeometry);
     ECS_IMPORT(world, FlecsSystemsTransform);
+    ECS_IMPORT(world, FlecsGame);
 
     /* Store components in parent sokol scope */
     ecs_entity_t parent = ecs_lookup_fullpath(world, "flecs.systems.sokol");
@@ -30707,8 +31390,9 @@ void FlecsSystemsSokolGeometryImport(
 
     ecs_set_scope(world, module);
 
-    /* Create queries for solid, emissive and transparent */
-    ECS_OBSERVER(world, CreateGeometryQueries, EcsOnSet, GeometryQuery);
+    /* Create queries for solid and emissive */
+    ECS_OBSERVER(world, CreateGeometryQueries, EcsOnSet, 
+        Geometry, GeometryQuery);
 
     /* Support for rectangle primitive */
     ECS_ENTITY_DEFINE(world, SokolRectangleGeometry, Geometry);
@@ -30719,18 +31403,11 @@ void FlecsSystemsSokolGeometryImport(
     /* Support for box primitive */
     ECS_ENTITY_DEFINE(world, SokolBoxGeometry, Geometry);
         ecs_set(world, SokolBoxGeometry, SokolGeometryQuery, {
-            .component = ecs_id(EcsBox),
-            .static_geometry = false
-        });
-
-    ECS_ENTITY_DEFINE(world, SokolBoxStaticGeometry, Geometry);
-        ecs_set(world, SokolBoxStaticGeometry, SokolGeometryQuery, {
-            .component = ecs_id(EcsBox),
-            .static_geometry = true
+            .component = ecs_id(EcsBox)
         });
 
     /* Create system that manages buffers */
     ECS_SYSTEM(world, SokolPopulateGeometry, EcsPreStore, 
-        Geometry, [in] GeometryQuery);       
+        Geometry, [in] GeometryQuery, [in] flecs.game.WorldCell(0, *));
 }
 

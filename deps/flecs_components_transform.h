@@ -101,17 +101,29 @@ ECS_STRUCT(EcsQuaternion, {
 
 #endif
 
+FLECS_COMPONENTS_TRANSFORM_API
+extern ECS_COMPONENT_DECLARE(EcsTransform2);
+
 typedef struct EcsTransform2 {
     mat3 value;
 } EcsTransform2;
+
+FLECS_COMPONENTS_TRANSFORM_API
+extern ECS_COMPONENT_DECLARE(EcsTransform3);
 
 typedef struct EcsTransform3 {
     mat4 value;
 } EcsTransform3;
 
+FLECS_COMPONENTS_TRANSFORM_API
+extern ECS_COMPONENT_DECLARE(EcsProject2);
+
 typedef struct EcsProject2 {
     mat3 value;
 } EcsProject2;
+
+FLECS_COMPONENTS_TRANSFORM_API
+extern ECS_COMPONENT_DECLARE(EcsProject3);
 
 typedef struct EcsProject3 {
     mat4 value;
