@@ -394,7 +394,7 @@ void SpawnEnemy(flecs::iter& it, const Game *g) {
     it.world().entity().child_of<enemies>().is_a<prefabs::Enemy>()
         .set<Direction>({0})
         .set<Position>({
-            lvl->spawn_point.x, -1.2, lvl->spawn_point.y
+            lvl->spawn_point.x, 1.2, lvl->spawn_point.y
         });
 }
 
@@ -537,7 +537,7 @@ void FireAtTarget(flecs::iter& it, size_t i,
             pos.z += 1.7 * TurretCannonLength * -v[2];
             glm_vec3_scale(v, BulletSpeed, v);
             pos.x += sin(angle) * TurretCannonOffset * turret.lr;
-            pos.y = -1.1;
+            pos.y = 1.1;
             pos.z += cos(angle) * TurretCannonOffset * turret.lr;
 
             // Alternate between left and right barrel
@@ -563,7 +563,7 @@ void FireAtTarget(flecs::iter& it, size_t i,
             // Enable laser beam
             e.target<prefabs::Laser::Head::Beam>().enable();
             pos.x += 1.4 * -v[0];
-            pos.y = -1.1;
+            pos.y = 1.1;
             pos.z += 1.4 * -v[2];
             ecs.scope<particles>().entity().is_a<prefabs::Bolt>()
                 .set<Position>(pos)
@@ -595,7 +595,7 @@ void BeamControl(flecs::iter& it, size_t i,
         Position pos = p;
         Position target_pos = enemy.get<Position>()[0];
         float distance = glm_vec3_distance(p, target_pos);
-        beam.set<Position>({ (distance / 2), -0.1, 0.0 });
+        beam.set<Position>({ (distance / 2), 0.1, 0.0 });
         beam.set<Box>({BeamSize, BeamSize, distance});
 
         // Subtract health from enemy as long as beam is firing
@@ -611,7 +611,7 @@ void BeamControl(flecs::iter& it, size_t i,
             glm_vec3_normalize(v);
 
             float ion_d = randf(distance - 0.7) + 0.7;
-            Position ion_pos = {pos.x - ion_d * v[0], -1.1, pos.z - ion_d * v[2]};
+            Position ion_pos = {pos.x - ion_d * v[0], 1.1, pos.z - ion_d * v[2]};
             Velocity ion_v = {
                 randf(0.02),
                 randf(0.02) + 0.01f,
@@ -755,14 +755,14 @@ void init_game(flecs::world& ecs) {
 
 void init_ui(flecs::world& ecs) {
     graphics::Camera camera_data = {};
-    camera_data.set_up(0, -1, 0);
+    camera_data.set_up(0, 1, 0);
     camera_data.set_fov(20);
     camera_data.near_ = 1.0;
     camera_data.far_ = 100.0;
     auto camera = ecs.entity("Camera")
         .add(flecs::game::CameraController)
-        .set<Position>({0, -8.0, -9.0})
-        .set<Rotation>({0.5})
+        .set<Position>({0, 8.0, -9.0})
+        .set<Rotation>({-0.5})
         .set<graphics::Camera>(camera_data);
 
     graphics::DirectionalLight light_data = {};
@@ -811,7 +811,7 @@ void init_level(flecs::world& ecs) {
     g->level = ecs.entity().set<Level>({path, spawn_point});
 
     ecs.entity()
-        .set<Position>({0, 2.5, to_z(TileCountZ / 2 - 0.5)})
+        .set<Position>({0, -2.5, to_z(TileCountZ / 2 - 0.5)})
         .set<Box>({to_x(TileCountX + 0.5) * 2, 5, to_z(TileCountZ + 2)})
         .set<Color>({0.11, 0.15, 0.1});
 
@@ -826,7 +826,7 @@ void init_level(flecs::world& ecs) {
             } else {
                 t.is_a<prefabs::Tile>();
 
-                auto e = ecs.entity().set<Position>({xc, -TileHeight / 2, zc});
+                auto e = ecs.entity().set<Position>({xc, TileHeight / 2, zc});
                 if (randf(1) > 0.65) {
                     e.child_of<level>();
                     e.is_a<prefabs::Tree>();
@@ -849,11 +849,11 @@ void init_prefabs(flecs::world& ecs) {
 
     ecs.prefab<prefabs::Tree>();
         ecs.prefab<prefabs::Tree::Trunk>()
-            .set<Position>({0, -0.75, 0})
+            .set<Position>({0, 0.75, 0})
             .set<Color>({0.25, 0.2, 0.1})
             .set<Box>({0.5, 1.5, 0.5});
         ecs.prefab<prefabs::Tree::Canopy>()
-            .set<Position>({0, -2.0, 0})
+            .set<Position>({0, 2.0, 0})
             .set<Color>({0.2, 0.3, 0.15})
             .set<Box>({1.5, 1.8, 1.5});
 
@@ -923,7 +923,7 @@ void init_prefabs(flecs::world& ecs) {
         .set<Particle>({
             SmokeSizeDecay, SmokeColorDecay, 1.0, SmokeLifespan
         })
-        .set<Velocity>({0, -0.8, 0})
+        .set<Velocity>({0, 0.8, 0})
         .override<Velocity>();
 
     ecs.prefab<prefabs::Spark>().is_a<prefabs::Particle>()
@@ -963,12 +963,12 @@ void init_prefabs(flecs::world& ecs) {
             ecs.prefab().is_a<prefabs::materials::Metal>()
                 .child_of<prefabs::Turret::Base>()
                 .set<Box>({0.6, 0.2, 0.6})
-                .set<Position>({0, -0.1, 0});
+                .set<Position>({0, 0.1, 0});
 
             ecs.prefab().is_a<prefabs::materials::Metal>()
                 .child_of<prefabs::Turret::Base>()
                 .set<Box>({0.4, 0.6, 0.4})
-                .set<Position>({0, -0.3, 0});
+                .set<Position>({0, 0.3, 0});
 
         ecs.prefab<prefabs::Turret::Head>().slot();
 
@@ -978,7 +978,7 @@ void init_prefabs(flecs::world& ecs) {
         ecs.prefab<prefabs::Cannon::Head>()
             .is_a<prefabs::materials::CannonHead>()
             .set<Box>({0.8, 0.4, 0.8})
-            .set<Position>({0, -0.8, 0})
+            .set<Position>({0, 0.8, 0})
             .set<Rotation>({0, 0.0, 0});
 
             ecs.prefab<prefabs::Cannon::Barrel>()
@@ -1000,7 +1000,7 @@ void init_prefabs(flecs::world& ecs) {
         .set<Turret>({BeamFireInterval});
 
         ecs.prefab<prefabs::Laser::Head>()
-            .set<Position>({0.0, -0.8, 0})
+            .set<Position>({0.0, 0.8, 0})
             .set<Rotation>({0, 0.0, 0});
 
             ecs.prefab().is_a<prefabs::materials::Metal>()
@@ -1031,7 +1031,7 @@ void init_prefabs(flecs::world& ecs) {
             ecs.prefab().is_a<prefabs::materials::Metal>()
                 .child_of<prefabs::Laser::Head>()
                 .set<Box>({1.0, 0.16, 0.16})
-                .set<Position>({0.8, -0.1, 0.0});                  
+                .set<Position>({0.8, 0.1, 0.0});                  
 
         ecs.prefab<prefabs::Laser::Head::Beam>().slot_of<prefabs::Laser>()
             .is_a<prefabs::materials::Beam>()

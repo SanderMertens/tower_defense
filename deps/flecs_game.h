@@ -72,7 +72,17 @@ FLECS_GAME_API
 extern ECS_DECLARE(EcsCameraController);
 
 FLECS_GAME_API
+ECS_STRUCT(EcsCameraAutoMove, {
+    float after;
+    float speed;
+    float t;
+});
+
+FLECS_GAME_API
 extern ECS_DECLARE(EcsWorldCell);
+
+FLECS_GAME_API
+extern ECS_DECLARE(EcsWorldCellRoot);
 
 FLECS_GAME_API
 ECS_STRUCT(EcsWorldCellCoord, {
