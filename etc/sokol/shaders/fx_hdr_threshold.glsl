@@ -6,4 +6,3 @@ vec4 c = texture(hdr, uv, mipmap);
 float l = dot(c.rgb, channel_lum);
 l = l * lmax;
 frag_color = c * l;
-

@@ -3,6 +3,7 @@
 uniform mat4 u_mat_v;
 uniform vec3 u_eye_pos;
 uniform vec3 u_light_pos;
+uniform vec3 u_night_color;
 uniform float u_aspect;
 uniform float u_offset;
 
@@ -40,5 +41,5 @@ void main() {
       mie_scatter_dir                 // Mie preferred scattering direction
   );
 
-  frag_color = vec4(atmos, 1.0);
+  frag_color = max(vec4(atmos, 1.0), vec4(u_night_color, 1.0));
 }

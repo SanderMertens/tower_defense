@@ -16,7 +16,7 @@ in vec4 color;
 in vec3 material;
 out vec4 frag_color;
 
-const int pcf_count = 2;
+const int pcf_count = 4;
 const int pcf_samples = (2 * pcf_count + 1) * (2 * pcf_count + 1);
 const float texel_c = 1.0;
 const float soft_shadow_edge = 10.0;

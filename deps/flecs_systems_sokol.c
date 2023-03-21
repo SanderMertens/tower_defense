@@ -30387,10 +30387,16 @@ SokolFx sokol_init_ssao(
     fx.width = width;
     fx.height = height;
 
+#ifdef __EMSCRIPTEN__
+    float factor = 2;
+#else
+    float factor = 0.5;
+#endif
+
     // Ambient occlusion shader 
     int32_t ao = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
         .name = "ssao",
-        .outputs = {{ .global_size = true, .factor = 0.5 }},
+        .outputs = {{ .global_size = true, .factor = factor }},
         .shader_header = shd_ssao_header,
         .shader = shd_ssao,
         .color_format = SG_PIXELFORMAT_RGBA8,
@@ -32301,9 +32307,10 @@ void sokol_init_global_uniforms(
     glm_vec3_copy(d, state->uniforms.eye_dir);
 
     /* Shadow parameters */
+    float shadow_far = u->far_ > 128 ? 128 : u->far_;
     u->shadow_map_size = SOKOL_SHADOW_MAP_SIZE;
     u->shadow_near = -8;
-    u->shadow_far = 128 + (u->eye_pos[1] - 32) * 2;
+    u->shadow_far = shadow_far;
 
     /* Calculate light position in screen space */
     vec3 sun_pos;
