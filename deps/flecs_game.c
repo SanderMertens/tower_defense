@@ -2,11 +2,192 @@
 
 #include "flecs_game.h"
 
-ECS_DECLARE(EcsWorldCell);
+#define VARIATION_SLOTS_MAX (20)
+
 ECS_DECLARE(EcsCameraController);
 
 void FlecsGameCameraControllerImport(ecs_world_t *world);
+void FlecsGameLightControllerImport(ecs_world_t *world);
 void FlecsGameWorldCellsImport(ecs_world_t *world);
+
+static
+float randf(float max) {
+    return max * (float)rand() / (float)RAND_MAX;
+}
+
+typedef struct {
+    float x_count;
+    float y_count;
+    float z_count;
+    float x_spacing;
+    float y_spacing;
+    float z_spacing;
+    float x_half;
+    float y_half;
+    float z_half;
+    float x_var;
+    float y_var;
+    float z_var;
+    float variations_total;
+    int32_t variations_count;
+    ecs_entity_t variations[VARIATION_SLOTS_MAX];
+    ecs_entity_t prefab;
+} flecs_grid_params_t;
+
+static
+ecs_entity_t get_prefab(
+    ecs_world_t *world, 
+    ecs_entity_t parent,
+    ecs_entity_t prefab) 
+{
+    if (!prefab) {
+        return 0;
+    }
+
+    /* If prefab is a script/assembly, create a private instance of the
+     * assembly for the grid with default values. This allows applications to
+     * use assemblies directly vs. having to create a dummy prefab */
+    ecs_entity_t result = prefab;
+    if (ecs_has(world, prefab, EcsScript) && ecs_has(world, prefab, EcsComponent)) {
+        result = ecs_new_w_pair(world, EcsChildOf, parent);
+        ecs_add_id(world, result, EcsPrefab);
+        ecs_add_id(world, result, prefab);
+    }
+    return result;
+}
+
+static
+ecs_entity_t generate_tile(
+    ecs_world_t *world,
+    const EcsGrid *grid,
+    float xc,
+    float yc,
+    float zc,
+    const flecs_grid_params_t *params)
+{
+    if (params->x_var) {
+        xc += randf(params->x_var) - params->x_var / 2;
+    }
+    if (params->y_var) {
+        yc += randf(params->y_var) - params->y_var / 2;
+    }
+    if (params->z_var) {
+        zc += randf(params->z_var) - params->z_var / 2;
+    }
+
+    ecs_entity_t slot = 0;
+    if (params->prefab) {
+        slot = params->prefab;
+    } else {
+        float p = randf(params->variations_total), cur = 0;
+        for (int v = 0; v < params->variations_count; v ++) {
+            cur += grid->variations[v].chance;
+            if (p <= cur) {
+                slot = params->variations[v];
+                break;
+            }
+        }
+    }
+
+    ecs_entity_t inst = ecs_new_w_pair(world, EcsIsA, slot);
+    ecs_set(world, inst, EcsPosition3, {xc, yc, zc});
+    return inst;
+}
+
+static
+void generate_grid(
+    ecs_world_t *world, 
+    ecs_entity_t parent, 
+    const EcsGrid *grid) 
+{
+    flecs_grid_params_t params = {0};
+
+    params.x_count = glm_max(1, grid->x.count);
+    params.y_count = glm_max(1, grid->y.count);
+    params.z_count = glm_max(1, grid->z.count);
+
+    bool border = false;
+    if (grid->border.x || grid->border.y || grid->border.z) {
+        params.x_spacing = grid->border.x / params.x_count;
+        params.y_spacing = grid->border.y / params.y_count;
+        params.z_spacing = grid->border.z / params.z_count;
+        border = true;
+    } else {
+        params.x_spacing = glm_max(0.001, grid->x.spacing);
+        params.y_spacing = glm_max(0.001, grid->y.spacing);
+        params.z_spacing = glm_max(0.001, grid->z.spacing);
+    }
+
+    params.x_half = ((params.x_count - 1) / 2.0) * params.x_spacing;
+    params.y_half = ((params.y_count - 1) / 2.0) * params.y_spacing;
+    params.z_half = ((params.z_count - 1) / 2.0) * params.z_spacing;
+    
+    params.x_var = grid->x.variation;
+    params.y_var = grid->y.variation;
+    params.z_var = grid->z.variation;
+
+    ecs_entity_t prefab = grid->prefab;
+    params.variations_total = 0;
+    params.variations_count = 0;
+    if (!prefab) {
+        for (int i = 0; i < VARIATION_SLOTS_MAX; i ++) {
+            if (!grid->variations[i].prefab) {
+                break;
+            }
+            params.variations[i] = get_prefab(world, parent, 
+                grid->variations[i].prefab);
+            params.variations_total += grid->variations[i].chance;
+            params.variations_count ++;
+        }
+    } else {
+        prefab = params.prefab = get_prefab(world, parent, prefab);
+    }
+
+    if (!prefab && !params.variations_count) {
+        return;
+    }
+
+    if (!border) {
+        for (int32_t x = 0; x < params.x_count; x ++) {
+            for (int32_t y = 0; y < params.y_count; y ++) {
+                for (int32_t z = 0; z < params.z_count; z ++) {
+                    float xc = (float)x * params.x_spacing - params.x_half;
+                    float yc = (float)y * params.y_spacing - params.y_half;
+                    float zc = (float)z * params.z_spacing - params.z_half;
+                    generate_tile(world, grid, xc, yc, zc, &params);
+                }
+            }
+        }
+    } else {
+        for (int32_t x = 0; x < params.x_count; x ++) {
+            float xc = (float)x * params.x_spacing - params.x_half;
+            float zc = grid->border.z / 2 + grid->border_offset.z;
+            generate_tile(world, grid, xc, 0, -zc, &params);
+            generate_tile(world, grid, xc, 0, zc, &params);
+        }
+
+        for (int32_t x = 0; x < params.z_count; x ++) {
+            float xc = grid->border.x / 2 + grid->border_offset.x;
+            float zc = (float)x * params.z_spacing - params.z_half;
+            ecs_entity_t inst;
+            inst = generate_tile(world, grid, xc, 0, zc, &params);
+            ecs_set(world, inst, EcsRotation3, {0, M_PI / 2, 0});
+            inst = generate_tile(world, grid, -xc, 0, zc, &params);
+            ecs_set(world, inst, EcsRotation3, {0, M_PI / 2, 0});
+        }
+    }
+}
+
+static
+void SetGrid(ecs_iter_t *it) {
+    EcsGrid *grid = ecs_field(it, EcsGrid, 1);
+
+    for (int i = 0; i < it->count; i ++) {
+        ecs_entity_t g = it->entities[0];
+        ecs_delete_with(it->world, ecs_pair(EcsChildOf, g));
+        generate_grid(it->world, g, &grid[i]);
+    }
+}
 
 void FlecsGameImport(ecs_world_t *world) {
     ECS_MODULE(world, FlecsGame);
@@ -14,6 +195,7 @@ void FlecsGameImport(ecs_world_t *world) {
     ECS_IMPORT(world, FlecsComponentsTransform);
     ECS_IMPORT(world, FlecsComponentsPhysics);
     ECS_IMPORT(world, FlecsComponentsGraphics);
+    ECS_IMPORT(world, FlecsComponentsGui);
     ECS_IMPORT(world, FlecsComponentsInput);
     ECS_IMPORT(world, FlecsSystemsPhysics);
 
@@ -22,9 +204,20 @@ void FlecsGameImport(ecs_world_t *world) {
     ECS_TAG_DEFINE(world, EcsCameraController);
     ECS_META_COMPONENT(world, EcsCameraAutoMove);
     ECS_META_COMPONENT(world, EcsWorldCellCoord);
+    ECS_META_COMPONENT(world, EcsTimeOfDay);
+    ECS_META_COMPONENT(world, ecs_grid_slot_t);
+    ECS_META_COMPONENT(world, ecs_grid_coord_t);
+    ECS_META_COMPONENT(world, EcsGrid);
 
     FlecsGameCameraControllerImport(world);
+    FlecsGameLightControllerImport(world);
     FlecsGameWorldCellsImport(world);
+
+    ecs_set_hooks(world, EcsTimeOfDay, {
+        .ctor = ecs_default_ctor
+    });
+
+    ECS_OBSERVER(world, SetGrid, EcsOnSet, Grid);
 }
 
 
@@ -78,8 +271,8 @@ ecs_entity_t flecs_game_get_cell(
 {
     int8_t quadrant = wcache->quadrant;
     uint64_t cell_id = wcache->cell_id;
-    ecs_entity_t *cell_ptr = ecs_map_ensure(&wcells->quadrants[quadrant].cells, 
-        ecs_entity_t, cell_id);
+    ecs_entity_t *cell_ptr = ecs_map_ensure(
+        &wcells->quadrants[quadrant].cells, cell_id);
     ecs_entity_t cell = *cell_ptr;
     if (!cell) {
         cell = *cell_ptr = ecs_new(world, EcsWorldCell);
@@ -270,10 +463,175 @@ void FlecsGameWorldCellsImport(ecs_world_t *world) {
     });
 
     WorldCells *wcells = ecs_singleton_get_mut(world, WorldCells);
-    ecs_map_init(&wcells->quadrants[0].cells, ecs_entity_t, NULL, 1);
-    ecs_map_init(&wcells->quadrants[1].cells, ecs_entity_t, NULL, 1);
-    ecs_map_init(&wcells->quadrants[2].cells, ecs_entity_t, NULL, 1);
-    ecs_map_init(&wcells->quadrants[3].cells, ecs_entity_t, NULL, 1);
+    ecs_map_init(&wcells->quadrants[0].cells, NULL);
+    ecs_map_init(&wcells->quadrants[1].cells, NULL);
+    ecs_map_init(&wcells->quadrants[2].cells, NULL);
+    ecs_map_init(&wcells->quadrants[3].cells, NULL);
+}
+
+
+static
+void LightControllerSyncPosition(ecs_iter_t *it) {
+    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 1);
+    EcsPosition3 *p = ecs_field(it, EcsPosition3, 2);
+
+    for (int i = 0; i < it->count; i ++) {
+        light[i].position[0] = p[i].x;
+        light[i].position[1] = p[i].y;
+        light[i].position[2] = p[i].z;
+    }
+}
+
+static
+void LightControllerSyncRotation(ecs_iter_t *it) {
+    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 1);
+    EcsPosition3 *p = ecs_field(it, EcsPosition3, 2);
+    EcsRotation3 *r = ecs_field(it, EcsRotation3, 3);
+
+    for (int i = 0; i < it->count; i ++) {
+        light[i].direction[0] = p[i].x + sin(r[i].y) * cos(r[i].x);
+        light[i].direction[1] = p[i].y + sin(r[i].x);
+        light[i].direction[2] = p[i].z + cos(r[i].y) * cos(r[i].x);
+    }
+}
+
+static
+void LightControllerSyncColor(ecs_iter_t *it) {
+    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 1);
+    EcsRgb *color = ecs_field(it, EcsRgb, 2);
+
+    for (int i = 0; i < it->count; i ++) {
+        light[i].color[0] = color[i].r;
+        light[i].color[1] = color[i].g;
+        light[i].color[2] = color[i].b;
+    }
+}
+
+static
+void LightControllerSyncIntensity(ecs_iter_t *it) {
+    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 1);
+    EcsLightIntensity *intensity = ecs_field(it, EcsLightIntensity, 2);
+
+    for (int i = 0; i < it->count; i ++) {
+        light[i].intensity = intensity[i].value;
+    }
+}
+
+static
+void TimeOfDayUpdate(ecs_iter_t *it) {
+    EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 1);
+    tod->t += it->delta_time * tod->speed;
+}
+
+static
+float get_time_of_day(float t) {
+    return (t + 1.0) * M_PI;
+}
+
+static
+float get_sun_height(float t) {
+    return -sin(get_time_of_day(t));
+}
+
+static
+void LightControllerTimeOfDay(ecs_iter_t *it) {
+    EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 1);
+    EcsRotation3 *r = ecs_field(it, EcsRotation3, 2);
+    EcsRgb *color = ecs_field(it, EcsRgb, 3);
+    EcsLightIntensity *light_intensity = ecs_field(it, EcsLightIntensity, 4);
+
+    static vec3 day = {0.8, 0.8, 0.6};
+    static vec3 twilight = {1.0, 0.1, 0.01};
+    float twilight_angle = 0.3;
+
+    for (int i = 0; i < it->count; i ++) {
+        r[i].x = get_time_of_day(tod[i].t);
+
+        float t_sin = get_sun_height(tod[i].t);
+        float t_sin_low = twilight_angle - t_sin;
+        vec3 sun_color;
+        if (t_sin_low > 0) {
+            t_sin_low *= 1.0 / twilight_angle;
+            glm_vec3_lerp(day, twilight, t_sin_low, sun_color);
+        } else {
+            glm_vec3_copy(day, sun_color);
+        }
+
+        /* increase just before sunrise/after sunset*/
+        float intensity = t_sin + 0.07;
+        if (intensity < 0) {
+            intensity = 0;
+        }
+
+        color[i].r = sun_color[0];
+        color[i].g = sun_color[1];
+        color[i].b = sun_color[2];
+        light_intensity[i].value = intensity;
+    }
+}
+
+static
+void AmbientLightControllerTimeOfDay(ecs_iter_t *it) {
+    EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 1);
+    EcsCanvas *canvas = ecs_field(it, EcsCanvas, 2);
+
+    static vec3 ambient_day = {0.03, 0.06, 0.09};
+    static vec3 ambient_night = {0.001, 0.008, 0.016};
+    static vec3 ambient_twilight = {0.01, 0.017, 0.02};
+    static float twilight_zone = 0.2;
+
+    for (int i = 0; i < it->count; i ++) {
+        float t_sin = get_sun_height(tod[i].t);
+        t_sin = (t_sin + 1.0) / 2;
+
+        float t_twilight = glm_max(0.0, twilight_zone - fabs(t_sin - 0.5));
+        t_twilight *= (1.0 / twilight_zone);
+
+        vec3 ambient_color;
+        glm_vec3_lerp(ambient_night, ambient_day, t_sin, ambient_color);
+        glm_vec3_lerp(ambient_color, ambient_twilight, t_twilight, ambient_color);
+        canvas[i].ambient_light.r = ambient_color[0];
+        canvas[i].ambient_light.g = ambient_color[1];
+        canvas[i].ambient_light.b = ambient_color[2];
+    }
+}
+
+void FlecsGameLightControllerImport(ecs_world_t *world) {
+    ECS_SYSTEM(world, LightControllerSyncPosition, EcsOnUpdate,
+        [out]    flecs.components.graphics.DirectionalLight, 
+        [in]     flecs.components.transform.Position3);
+
+    ECS_SYSTEM(world, LightControllerSyncRotation, EcsOnUpdate,
+        [out]    flecs.components.graphics.DirectionalLight, 
+        [in]     flecs.components.transform.Position3,
+        [in]     flecs.components.transform.Rotation3);
+
+    ECS_SYSTEM(world, LightControllerSyncIntensity, EcsOnUpdate,
+        [out]    flecs.components.graphics.DirectionalLight, 
+        [in]     flecs.components.graphics.LightIntensity);
+
+    ECS_SYSTEM(world, LightControllerSyncColor, EcsOnUpdate,
+        [out]    flecs.components.graphics.DirectionalLight, 
+        [in]     flecs.components.graphics.Rgb);
+
+    ECS_SYSTEM(world, TimeOfDayUpdate, EcsOnUpdate,
+        [inout]   TimeOfDay($));
+
+    ECS_SYSTEM(world, LightControllerTimeOfDay, EcsOnUpdate,
+        [in]      TimeOfDay($), 
+        [out]     flecs.components.transform.Rotation3,
+        [out]     flecs.components.graphics.Rgb,
+        [out]     flecs.components.graphics.LightIntensity,
+        [none]    flecs.components.graphics.Sun);
+
+    ECS_SYSTEM(world, AmbientLightControllerTimeOfDay, EcsOnUpdate,
+        [in]      TimeOfDay($), 
+        [out]     flecs.components.gui.Canvas);
+
+    ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsRotation3));
+    ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsDirectionalLight));
+    ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsRgb));
+    ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsLightIntensity));
 }
 
 
@@ -284,7 +642,7 @@ static const float CameraDeceleration = CAMERA_DECELERATION;
 static const float CameraAcceleration = 50.0 + CAMERA_DECELERATION;
 static const float CameraAngularDeceleration = CAMERA_ANGULAR_DECELERATION;
 static const float CameraAngularAcceleration = 2.5 + CAMERA_ANGULAR_DECELERATION;
-static const float CameraMaxSpeed = 50.0;
+static const float CameraMaxSpeed = 40.0;
 
 static
 void CameraControllerAddPosition(ecs_iter_t *it) {
@@ -336,6 +694,18 @@ void CameraControllerSyncRotation(ecs_iter_t *it) {
         camera[i].lookat[0] = p[i].x + sin(r[i].y) * cos(r[i].x);
         camera[i].lookat[1] = p[i].y + sin(r[i].x);
         camera[i].lookat[2] = p[i].z + cos(r[i].y) * cos(r[i].x);;
+    }
+}
+
+static
+void CameraControllerSyncLookAt(ecs_iter_t *it) {
+    EcsCamera *camera = ecs_field(it, EcsCamera, 1);
+    EcsLookAt *lookat = ecs_field(it, EcsLookAt, 2);
+
+    for (int i = 0; i < it->count; i ++) {
+        camera[i].lookat[0] = lookat[i].x;
+        camera[i].lookat[1] = lookat[i].y;
+        camera[i].lookat[2] = lookat[i].z;
     }
 }
 
@@ -499,6 +869,11 @@ void FlecsGameCameraControllerImport(ecs_world_t *world) {
         [out]    flecs.components.graphics.Camera, 
         [in]     flecs.components.transform.Position3,
         [in]     flecs.components.transform.Rotation3,
+        [none]   CameraController);
+
+    ECS_SYSTEM(world, CameraControllerSyncLookAt, EcsOnUpdate,
+        [out]    flecs.components.graphics.Camera, 
+        [in]     flecs.components.graphics.LookAt,
         [none]   CameraController);
 
     ECS_SYSTEM(world, CameraControllerAccelerate, EcsOnUpdate,

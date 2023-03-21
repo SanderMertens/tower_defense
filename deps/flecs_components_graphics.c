@@ -2,6 +2,8 @@
 
 #include "flecs_components_graphics.h"
 
+ECS_TAG_DECLARE(EcsSun);
+
 ECS_CTOR(EcsCamera, ptr, {
     ptr->position[0] = 0.0f;
     ptr->position[1] = 0.0f;
@@ -20,6 +22,19 @@ ECS_CTOR(EcsCamera, ptr, {
     ptr->far_ = 1000;
 })
 
+ECS_CTOR(EcsAtmosphere, ptr, {
+    ptr->intensity = 7.0;
+    ptr->planet_radius = 6371e3;
+    ptr->atmosphere_radius = 6471e3;
+    ptr->rayleigh_coef[0] = 5.5e-6;
+    ptr->rayleigh_coef[1] = 13.0e-6;
+    ptr->rayleigh_coef[2] = 22.4e-6;
+    ptr->mie_coef = 21e-6;
+    ptr->rayleigh_scale_height = 8e3;
+    ptr->mie_scale_height = 1.2e3;
+    ptr->mie_scatter_dir = 0.758;
+})
+
 void FlecsComponentsGraphicsImport(
     ecs_world_t *world)
 {
@@ -29,10 +44,18 @@ void FlecsComponentsGraphicsImport(
     ecs_set_name_prefix(world, "Ecs");
 
     ECS_META_COMPONENT(world, EcsCamera);
+    ECS_META_COMPONENT(world, EcsLookAt);
     ECS_META_COMPONENT(world, EcsDirectionalLight);
     ECS_META_COMPONENT(world, EcsRgb);
     ECS_META_COMPONENT(world, EcsRgba);
     ECS_META_COMPONENT(world, EcsSpecular);
     ECS_META_COMPONENT(world, EcsEmissive);
+    ECS_META_COMPONENT(world, EcsLightIntensity);
+    ECS_META_COMPONENT(world, EcsAtmosphere);
+    ECS_TAG_DEFINE(world, EcsSun);
+
+    ecs_set_hooks(world, EcsAtmosphere, {
+        .ctor = ecs_ctor(EcsAtmosphere)
+    });
 }
 

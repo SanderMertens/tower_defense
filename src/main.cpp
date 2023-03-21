@@ -768,6 +768,7 @@ void init_ui(flecs::world& ecs) {
     graphics::DirectionalLight light_data = {};
     light_data.set_direction(0.3, -1.0, 0.5);
     light_data.set_color(0.98, 0.95, 0.8);
+    light_data.intensity = 1.0;
     auto light = ecs.entity("Sun")
         .set<graphics::DirectionalLight>(light_data);
 
@@ -780,7 +781,8 @@ void init_ui(flecs::world& ecs) {
     canvas_data.ambient_light = {0.06, 0.05, 0.18};
     canvas_data.background_color = {0.15, 0.4, 0.6};
     canvas_data.fog_density = 0.65;
-    ecs.entity().set<gui::Canvas>(canvas_data);
+    ecs.entity()
+        .set<gui::Canvas>(canvas_data);
 }
 
 // Init level
@@ -1147,5 +1149,6 @@ int main(int argc, char *argv[]) {
 
     ecs.app()
         .enable_rest()
+        .target_fps(60)
         .run();
 }

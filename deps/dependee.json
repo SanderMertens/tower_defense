@@ -40,10 +40,10 @@
                 "ldflags": [
                     "-s GL_DEBUG=1"
                 ]
-            }
-        },
-        "libs": [
-            "m"
-        ]
+            },
+            "embed": [
+                "etc\/sokol\/shaders"
+            ]
+        }
     }
 }

@@ -71,6 +71,14 @@ ECS_STRUCT(EcsDirectionalLight, {
     vec3 position;
     vec3 direction;
     vec3 color;
+    float intensity;
+});
+
+FLECS_COMPONENTS_GRAPHICS_API
+ECS_STRUCT(EcsLookAt, {
+    float x;
+    float y;
+    float z;
 });
 
 FLECS_COMPONENTS_GRAPHICS_API
@@ -102,6 +110,26 @@ FLECS_COMPONENTS_GRAPHICS_API
 ECS_STRUCT(EcsEmissive, {
     float value;
 });
+
+FLECS_COMPONENTS_GRAPHICS_API
+ECS_STRUCT(EcsLightIntensity, {
+    float value;
+});
+
+FLECS_COMPONENTS_GRAPHICS_API
+ECS_STRUCT(EcsAtmosphere, {
+    float intensity;
+    float planet_radius;
+    float atmosphere_radius;
+    vec3 rayleigh_coef;
+    float mie_coef;
+    float rayleigh_scale_height;
+    float mie_scale_height;
+    float mie_scatter_dir;
+});
+
+FLECS_COMPONENTS_GRAPHICS_API
+extern ECS_TAG_DECLARE(EcsSun);
 
 FLECS_COMPONENTS_GRAPHICS_API
 void FlecsComponentsGraphicsImport(
@@ -195,6 +223,7 @@ public:
     using Rgba = EcsRgba;
     using Specular = EcsSpecular;
     using Emissive = EcsEmissive;
+    using Atmosphere = EcsAtmosphere;
 
     graphics(flecs::world& ecs) {
         // Load module contents

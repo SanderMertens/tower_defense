@@ -23,5 +23,10 @@
         "repositories": {
             "flecs.hub": "https://github.com/flecs-hub/flecs-hub"
         }
+    },
+    "lang.c": {
+        "${target em}": {
+            "ldflags": ["-sSTACK_SIZE=1000000"]
+        }
     }
 }

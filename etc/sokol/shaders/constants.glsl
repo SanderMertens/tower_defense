@@ -1,0 +1,3 @@
+#define PI 3.1415926535897932384626433832795
+#define PI2 (2.0 * PI)
+#define EPSILON 1e-6f
