@@ -758,7 +758,7 @@ void init_ui(flecs::world& ecs) {
     camera_data.set_up(0, 1, 0);
     camera_data.set_fov(20);
     camera_data.near_ = 1.0;
-    camera_data.far_ = 40.0;
+    camera_data.far_ = 100.0;
     auto camera = ecs.entity("Camera")
         .add(flecs::game::CameraController)
         .set<Position>({0, 8.0, -9.0})
@@ -780,7 +780,7 @@ void init_ui(flecs::world& ecs) {
     canvas_data.directional_light = light.id();
     canvas_data.ambient_light = {0.06, 0.05, 0.18};
     canvas_data.background_color = {0.15, 0.4, 0.6};
-    canvas_data.fog_density = 0.5;
+    canvas_data.fog_density = 1.0;
     ecs.entity()
         .set<gui::Canvas>(canvas_data);
 }

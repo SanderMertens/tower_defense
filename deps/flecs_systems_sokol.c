@@ -31276,10 +31276,7 @@ sg_image sokol_noise_texture(
 
 sg_image sokol_bg_texture(ecs_rgb_t color, int32_t width, int32_t height)
 {
-    uint32_t **data = ecs_os_malloc_n(uint32_t*, width);
-    for (int i = 0; i < width; i ++) {
-        data[i] = ecs_os_malloc_n(uint32_t, height);
-    }
+    uint32_t *data = ecs_os_malloc_n(uint32_t, width * height);
 
     for (int32_t x = 0; x < width; x ++) {
         for (int32_t y = 0; y < height; y ++) {
@@ -31287,8 +31284,8 @@ sg_image sokol_bg_texture(ecs_rgb_t color, int32_t width, int32_t height)
             c += (uint32_t)(color.g * 256) << 8;
             c += (uint32_t)(color.b * 256) << 16;
             c += 255u << 24;
-            data[x][y] = c;
-            
+
+            data[x + y * width] = c;
         }
     }
 
@@ -31304,11 +31301,6 @@ sg_image sokol_bg_texture(ecs_rgb_t color, int32_t width, int32_t height)
             .size = width * height * 4
         }
     });
-
-    for (int i = 0; i < width; i ++) {
-        ecs_os_free(data[i]);
-    }
-    ecs_os_free(data);
 
     return img;
 }
