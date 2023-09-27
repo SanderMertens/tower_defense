@@ -10,11 +10,11 @@ git clone https://github.com/SanderMertens/bake
 bake/setup.sh
 ```
 
-Install bake on Windows
+Install bake on Windows (don't use powershell)
 ```
 git clone https://github.com/SanderMertens/bake
 cd bake
-setup
+setup.bat
 ```
 
 or if you already have a bake installation:
