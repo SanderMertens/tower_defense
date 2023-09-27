@@ -26,8 +26,7 @@
     },
     "lang.c": {
         "${target em}": {
-            "ldflags": ["-sSTACK_SIZE=1000000"],
-            "embed": ["etc/assets"]
+            "ldflags": ["-sSTACK_SIZE=1000000", "-Wl,-u,ntohs"]
         }
     }
 }
