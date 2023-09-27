@@ -74,12 +74,13 @@ ECS_STRUCT(EcsRectangle, {
     float height;
 });
 
-typedef EcsRectangle ecs_rect_t;
-
 FLECS_COMPONENTS_GEOMETRY_API
-ECS_STRUCT(EcsSquare, {
-    float size;
+ECS_STRUCT(EcsStroke, {
+    float width;
+    ecs_rgb_t color;
 });
+
+typedef EcsRectangle ecs_rect_t;
 
 FLECS_COMPONENTS_GEOMETRY_API
 ECS_STRUCT(EcsCircle, {
@@ -125,7 +126,7 @@ public:
     using Line2 = EcsLine2;
     using Line3 = EcsLine3;
     using Rectangle = EcsRectangle;
-    using Square = EcsSquare;
+    using Stroke = EcsStroke;
     using Circle = EcsCircle;
     using Box = EcsBox;
 
@@ -138,7 +139,6 @@ public:
         ecs.component<Line2>();
         ecs.component<Line3>();
         ecs.component<Rectangle>();
-        ecs.component<Square>();
         ecs.component<Circle>();
         ecs.component<Box>();
     }

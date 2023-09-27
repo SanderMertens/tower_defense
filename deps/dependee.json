@@ -12,17 +12,20 @@
                 "dl"
             ]
         },
-        "${cfg sanitize}": {
-            "defines": [
-                "FLECS_SANITIZE"
-            ]
-        },
         "${os windows}": {
+            "lib": [
+                "ws2_32"
+            ],
             "defines": [
                 "_WINDOWS",
                 "_USRDLL",
                 "CGLM_EXPORTS",
                 "CGLM_DLL"
+            ]
+        },
+        "${cfg sanitize}": {
+            "defines": [
+                "FLECS_SANITIZE"
             ]
         },
         "${os darwin}": {

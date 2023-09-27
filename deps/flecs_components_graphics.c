@@ -54,6 +54,18 @@ void FlecsComponentsGraphicsImport(
     ECS_META_COMPONENT(world, EcsAtmosphere);
     ECS_TAG_DEFINE(world, EcsSun);
 
+    ecs_struct(world, {
+        .entity = ecs_entity(world, { 
+            .name = "ecs_rgb_t",
+            .symbol = "ecs_rgb_t",
+        }),
+        .members = {
+            { .name = "r", .type = ecs_id(ecs_f32_t) },
+            { .name = "g", .type = ecs_id(ecs_f32_t) },
+            { .name = "b", .type = ecs_id(ecs_f32_t) }
+        }
+    });
+
     ecs_set_hooks(world, EcsAtmosphere, {
         .ctor = ecs_ctor(EcsAtmosphere)
     });

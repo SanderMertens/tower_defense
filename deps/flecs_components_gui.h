@@ -53,6 +53,8 @@
 #define ECS_META_IMPL EXTERN // Ensure meta symbols are only defined once
 #endif
 
+/* Canvas */
+
 FLECS_COMPONENTS_GUI_API
 ECS_STRUCT(EcsCanvas, {
     char *title;
@@ -63,6 +65,43 @@ ECS_STRUCT(EcsCanvas, {
     EcsRgb background_color;
     EcsRgb ambient_light;
     float fog_density;
+    float fog_falloff;
+});
+
+/* Text & fonts */
+
+FLECS_COMPONENTS_GUI_API
+ECS_STRUCT(EcsText, {
+    char *value;
+});
+
+FLECS_COMPONENTS_GUI_API
+ECS_STRUCT(EcsFontSize, {
+    int32_t value;
+});
+
+FLECS_COMPONENTS_GUI_API
+ECS_ENUM(EcsFontStyle, {
+    EcsFontStyleRegular,
+    EcsFontStyleItalic,
+    EcsFontStyleBold
+});
+
+/* Alignment */
+
+FLECS_COMPONENTS_GUI_API
+ECS_BITMASK(EcsAlign, {
+    EcsAlignLeft    = 1,
+    EcsAlignCenter  = 2,
+    EcsAlignRight   = 4,
+    EcsAlignTop     = 8,
+    EcsAlignMiddle  = 16,
+    EcsAlignBottom  = 32
+});
+
+FLECS_COMPONENTS_GUI_API
+ECS_STRUCT(EcsPadding, {
+    float value;
 });
 
 #ifdef __cplusplus

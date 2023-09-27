@@ -5654,7 +5654,7 @@ _SOKOL_PRIVATE void _sg_dummy_update_image(_sg_image_t* img, const sg_image_data
     _SG_XMACRO(glGenVertexArrays,                 void, (GLsizei n, GLuint * arrays)) \
     _SG_XMACRO(glFrontFace,                       void, (GLenum mode)) \
     _SG_XMACRO(glCullFace,                        void, (GLenum mode)) \
-    _SG_XMACRO(glPixelStorei,                     void, (GLenum pname, GLint param))
+    _SG_XMACRO(glPixelStorei,                     void, (GLenum pname, GLint param)) \
     _SG_XMACRO(glGenerateMipmap,                  void, (GLenum target))
 
 // generate GL function pointer typedefs
@@ -30112,77 +30112,238 @@ void FlecsSystemsSokolImport(
 }
 
 
-typedef struct shadow_vs_uniforms_t {
-    mat4 mat_vp;
-} shadow_vs_uniforms_t;
+typedef struct atmos_fs_uniforms_t {
+    mat4 inv_mat_vp;
+    vec3 eye_pos;
+    vec3 light_pos;
+    vec3 night_color;
+    float aspect;
+    float offset;
+} atmos_fs_uniforms_t;
 
-static const char *shd_v = 
+typedef struct atmos_param_fs_uniforms_t {
+    float intensity;
+    float planet_radius;
+    float atmosphere_radius;
+    float mie_coef;
+    float rayleigh_scale_height;
+    float mie_scale_height;
+    float mie_scatter_dir;
+    vec3 rayleigh_coef;
+} atmos_param_fs_uniforms_t;
+
+static const char *atmosphere_f =
     SOKOL_SHADER_HEADER
-    "uniform mat4 u_mat_vp;\n"
-    "layout(location=0) in vec3 v_position;\n"
-    "layout(location=1) in mat4 i_mat_m;\n"
-    "out vec2 proj_zw;\n"
-    "void main() {\n"
-    "  gl_Position = u_mat_vp * i_mat_m * vec4(v_position, 1.0);\n"
-    "  proj_zw = gl_Position.zw;\n"
-    "}\n";
+    "#include \"etc/sokol/shaders/atmosphere_frag.glsl\"\n";
 
-static const char *shd_f =
-    SOKOL_SHADER_HEADER
-    "in vec2 proj_zw;\n"
-    "out vec4 frag_color;\n"
-
-    "vec4 encodeDepth(float v) {\n"
-    "    vec4 enc = vec4(1.0, 255.0, 65025.0, 160581375.0) * v;\n"
-    "    enc = fract(enc);\n"
-    "    enc -= enc.yzww * vec4(1.0/255.0,1.0/255.0,1.0/255.0,0.0);\n"
-    "    return enc;\n"
-    "}\n"
-
-    "void main() {\n"
-    "  float depth = proj_zw.x / proj_zw.y;\n"
-    "  frag_color = encodeDepth(depth);\n"
-    "}\n";
-
-sokol_offscreen_pass_t sokol_init_shadow_pass(
-    int size)
+static
+void update_atmosphere_pass(sokol_offscreen_pass_t *pass)
 {
-    ecs_trace("sokol: initialize shadow pipeline");
+    pass->pass_action = sokol_clear_action((ecs_rgb_t){1, 1, 1}, false, false),
+    pass->color_target = sokol_target_rgba16f(
+        "Atmos color target", 256, 256, 1, 1);
+    pass->pass = sg_make_pass(&(sg_pass_desc){
+        .color_attachments[0].image = pass->color_target,
+        .label = "atmosphere-pass"
+    });
+}
 
+sokol_offscreen_pass_t sokol_init_atmos_pass(void)
+{
     sokol_offscreen_pass_t result = {0};
+    update_atmosphere_pass(&result);
 
-    result.pass_action  = (sg_pass_action) {
-        .colors[0] = { 
-            .action = SG_ACTION_CLEAR, 
-            .value = { 1.0f, 1.0f, 1.0f, 1.0f}
-        }
-    };
-
-    result.depth_target = sokol_target_depth(size, size, 1);
-    result.color_target = sokol_target_rgba8("Shadow map", size, size, 1);
-
-    result.pass = sg_make_pass(&(sg_pass_desc){
-        .color_attachments[0].image = result.color_target,
-        .depth_stencil_attachment.image = result.depth_target,
-        .label = "shadow-map-pass"
-    });
-
+    char *fs = sokol_shader_from_str(atmosphere_f);
     sg_shader shd = sg_make_shader(&(sg_shader_desc){
-        .vs.uniform_blocks = {
-            [0] = {
-                .size = sizeof(shadow_vs_uniforms_t),
-                .uniforms = {
-                    [0] = { .name="u_mat_vp", .type=SG_UNIFORMTYPE_MAT4 },
+        .vs.source = sokol_vs_passthrough(),
+        .fs = {
+            .source = fs,
+            .uniform_blocks = {
+                [0] = {
+                    .size = sizeof(atmos_fs_uniforms_t),
+                    .uniforms = {
+                        [0] = { .name="u_mat_v", .type=SG_UNIFORMTYPE_MAT4 },
+                        [1] = { .name="u_eye_pos", .type=SG_UNIFORMTYPE_FLOAT3 },
+                        [2] = { .name="u_light_pos", .type=SG_UNIFORMTYPE_FLOAT3 },
+                        [3] = { .name="u_night_color", .type=SG_UNIFORMTYPE_FLOAT3 },
+                        [4] = { .name="u_aspect", .type=SG_UNIFORMTYPE_FLOAT },
+                        [5] = { .name="u_offset", .type=SG_UNIFORMTYPE_FLOAT },
+                        [6] = { .name="padding", .type=SG_UNIFORMTYPE_FLOAT },
+                    }
                 },
+                [1] = {
+                    .size = sizeof(atmos_param_fs_uniforms_t),
+                    .uniforms = {
+                        [0] = { .name="intensity", .type=SG_UNIFORMTYPE_FLOAT },
+                        [1] = { .name="planet_radius", .type=SG_UNIFORMTYPE_FLOAT },
+                        [2] = { .name="atmosphere_radius", .type=SG_UNIFORMTYPE_FLOAT },
+                        [3] = { .name="mie_coef", .type=SG_UNIFORMTYPE_FLOAT },
+                        [4] = { .name="rayleigh_scale_height", .type=SG_UNIFORMTYPE_FLOAT },
+                        [5] = { .name="mie_scale_height", .type=SG_UNIFORMTYPE_FLOAT },
+                        [6] = { .name="mie_scatter_dir", .type=SG_UNIFORMTYPE_FLOAT },
+                        [7] = { .name="rayleigh_coef", .type=SG_UNIFORMTYPE_FLOAT3 },
+                    }
+                }
             }
-        },
-        .vs.source = shd_v,
-        .fs.source = shd_f
+        }
     });
+    ecs_os_free(fs);
 
     /* Create pipeline that mimics the normal pipeline, but without the material
      * normals and color, and with front culling instead of back culling */
     result.pip = sg_make_pipeline(&(sg_pipeline_desc){
+        .shader = shd,
+        .layout = {
+            .attrs = {
+                /* Static geometry */
+                [0] = { .buffer_index=0, .format=SG_VERTEXFORMAT_FLOAT3 },
+                [1] = { .buffer_index=0, .format=SG_VERTEXFORMAT_FLOAT2 }
+            }
+        },
+        .colors = {{
+            .pixel_format = SG_PIXELFORMAT_RGBA16F
+        }},
+        .cull_mode = SG_CULLMODE_FRONT,
+        .sample_count = 1
+    });
+
+    return result;
+}
+
+void sokol_run_atmos_pass(
+    sokol_offscreen_pass_t *pass,
+    sokol_render_state_t *state) 
+{
+    if (!state->atmosphere) {
+        ecs_err("atmosphere pass called without atmosphere parameters");
+        return;
+    }
+
+    atmos_fs_uniforms_t fs_u;
+    glm_mat4_copy(state->uniforms.inv_mat_v, fs_u.inv_mat_vp);
+    glm_vec3_copy(state->uniforms.eye_pos, fs_u.eye_pos);
+    glm_vec3_copy(state->uniforms.sun_direction, fs_u.light_pos);
+    fs_u.night_color[0] = 0.001 / 8.0;
+    fs_u.night_color[1] = 0.008 / 8.0;
+    fs_u.night_color[2] = 0.016 / 8.0;
+    fs_u.aspect = state->uniforms.aspect;
+    fs_u.offset = 0.05;
+
+    atmos_param_fs_uniforms_t fs_p_u;
+    fs_p_u.intensity = state->atmosphere->intensity;
+    fs_p_u.planet_radius = state->atmosphere->planet_radius;
+    fs_p_u.atmosphere_radius = state->atmosphere->atmosphere_radius;
+    fs_p_u.mie_coef = state->atmosphere->mie_coef;
+    fs_p_u.rayleigh_scale_height = state->atmosphere->rayleigh_scale_height;
+    fs_p_u.mie_scale_height = state->atmosphere->mie_scale_height;
+    fs_p_u.mie_scatter_dir = state->atmosphere->mie_scatter_dir;
+    glm_vec3_copy((float*)state->atmosphere->rayleigh_coef, fs_p_u.rayleigh_coef);
+
+    sg_begin_pass(pass->pass, &pass->pass_action);
+    sg_apply_pipeline(pass->pip);
+    sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, &(sg_range){&fs_u, sizeof(atmos_fs_uniforms_t)});
+    sg_apply_uniforms(SG_SHADERSTAGE_FS, 1, &(sg_range){&fs_p_u, sizeof(atmos_param_fs_uniforms_t)});
+
+    sg_bindings bind = { .vertex_buffers = { state->resources->quad } };
+    sg_apply_bindings(&bind);
+    sg_draw(0, 6, 1);
+    sg_end_pass();
+
+    sg_end_pass();
+}
+
+
+typedef struct depth_vs_uniforms_t {
+    mat4 mat_vp;
+} depth_vs_uniforms_t;
+
+typedef struct depth_fs_uniforms_t {
+    vec3 eye_pos;
+    float near_;
+    float far_;
+    float depth_c;
+    float inv_log_far;
+} depth_fs_uniforms_t;
+
+const char* sokol_vs_depth(void) 
+{
+    return SOKOL_SHADER_HEADER
+        "uniform mat4 u_mat_vp;\n"
+        "uniform vec3 u_eye_pos;\n"
+        "layout(location=0) in vec4 v_position;\n"
+        "layout(location=1) in mat4 i_mat_m;\n"
+        "out vec3 position;\n"
+        "void main() {\n"
+        "  gl_Position = u_mat_vp * i_mat_m * v_position;\n"
+        "  position = gl_Position.xyz;\n"
+        "}\n";
+}
+
+const char* sokol_fs_depth(void) 
+{
+    return SOKOL_SHADER_HEADER
+        "uniform vec3 u_eye_pos;\n"
+        "uniform float u_near;\n"
+        "uniform float u_far;\n"
+        "uniform float u_depth_c;\n"
+        "uniform float u_inv_log_far;\n"
+        "in vec3 position;\n"
+        "out vec4 frag_color;\n"
+
+        SOKOL_SHADER_FUNC_FLOAT_TO_RGBA
+
+#ifdef SOKOL_LOG_DEPTH
+        "vec4 depth_to_rgba(vec3 pos) {\n"
+        "  vec3 pos_norm = pos / u_far;\n"
+        "  float d = length(pos_norm) * u_far;\n"
+        "  d = clamp(d, 0.0, u_far * 0.98);\n"
+        "  d = log(u_depth_c * d + 1.0) / log(u_depth_c * u_far + 1.0);\n"
+        "  return float_to_rgba(d);\n"
+        "}\n"
+#else
+        "vec4 depth_to_rgba(vec3 pos) {\n"
+        "  vec3 pos_norm = pos / u_far;\n"
+        "  float d = length(pos_norm);\n"
+        "  d = clamp(d, 0.0, 1.0);\n"
+        "  return float_to_rgba(d);\n"
+        "}\n"
+#endif
+
+        "void main() {\n"
+        "  frag_color = depth_to_rgba(position);\n"
+        "}\n";
+}
+
+sg_pipeline init_depth_pipeline(int32_t sample_count) {
+    ecs_trace("sokol: initialize depth pipeline");
+
+    /* create an instancing shader */
+    sg_shader shd = sg_make_shader(&(sg_shader_desc){
+        .vs.uniform_blocks = {
+            [0] = {
+                .size = sizeof(depth_vs_uniforms_t),
+                .uniforms = {
+                    [0] = { .name="u_mat_vp", .type=SG_UNIFORMTYPE_MAT4 }
+                },
+            }
+        },
+        .fs.uniform_blocks = { 
+            [0] = {
+                .size = sizeof(depth_fs_uniforms_t),
+                .uniforms = {
+                    [0] = { .name="u_eye_pos", .type=SG_UNIFORMTYPE_FLOAT3 },
+                    [1] = { .name="u_near", .type=SG_UNIFORMTYPE_FLOAT },
+                    [2] = { .name="u_far", .type=SG_UNIFORMTYPE_FLOAT },
+                    [3] = { .name="u_depth_c", .type = SG_UNIFORMTYPE_FLOAT },
+                    [4] = { .name="u_inv_log_far", .type = SG_UNIFORMTYPE_FLOAT }
+                },
+            }            
+        },
+        .vs.source = sokol_vs_depth(),
+        .fs.source = sokol_fs_depth()
+    });
+
+    return sg_make_pipeline(&(sg_pipeline_desc){
         .shader = shd,
         .index_type = SG_INDEXTYPE_UINT16,
         .layout = {
@@ -30193,7 +30354,7 @@ sokol_offscreen_pass_t sokol_init_shadow_pass(
             .attrs = {
                 /* Static geometry */
                 [0] = { .buffer_index=0, .offset=0,  .format=SG_VERTEXFORMAT_FLOAT3 },
-
+         
                 /* Matrix (per instance) */
                 [1] = { .buffer_index=1, .offset=0,  .format=SG_VERTEXFORMAT_FLOAT4 },
                 [2] = { .buffer_index=1, .offset=16, .format=SG_VERTEXFORMAT_FLOAT4 },
@@ -30209,14 +30370,56 @@ sokol_offscreen_pass_t sokol_init_shadow_pass(
         .colors = {{
             .pixel_format = SG_PIXELFORMAT_RGBA8
         }},
-        .cull_mode = SG_CULLMODE_FRONT
+        .cull_mode = SG_CULLMODE_BACK,
+        .sample_count = sample_count
     });
+}
 
-    return result;
+sokol_offscreen_pass_t sokol_init_depth_pass(
+    int32_t w, 
+    int32_t h,
+    sg_image depth_target,
+    int32_t sample_count) 
+{
+    ecs_trace("sokol: initialize depth pass");
+
+    sg_image color_target = sokol_target_rgba8(
+        "Depth color target", w, h, sample_count);
+    ecs_rgb_t background_color = {1, 1, 1};
+
+    return (sokol_offscreen_pass_t){
+        .pass_action = sokol_clear_action(background_color, true, true),
+        .pass = sg_make_pass(&(sg_pass_desc){
+            .color_attachments[0].image = color_target,
+            .depth_stencil_attachment.image = depth_target
+        }),
+        .pip = init_depth_pipeline(sample_count),
+        .color_target = color_target,
+        .depth_target = depth_target
+    };
+}
+
+void sokol_update_depth_pass(
+    sokol_offscreen_pass_t *pass,
+    int32_t w,
+    int32_t h,
+    sg_image depth_target,
+    int32_t sample_count)
+{
+    sg_destroy_image(pass->color_target);
+    sg_destroy_pass(pass->pass);
+
+    pass->color_target = sokol_target_rgba8(
+        "Depth color target", w, h, sample_count);
+
+    pass->pass = sg_make_pass(&(sg_pass_desc){
+        .color_attachments[0].image = pass->color_target,
+        .depth_stencil_attachment.image = depth_target
+    });
 }
 
 static
-void shadow_draw_instances(
+void depth_draw_instances(
     SokolGeometry *geometry,
     sokol_geometry_buffers_t *buffers)
 {
@@ -30236,369 +30439,39 @@ void shadow_draw_instances(
     sg_draw(0, geometry->index_count, buffers->instance_count);
 }
 
-void sokol_run_shadow_pass(
+void sokol_run_depth_pass(
     sokol_offscreen_pass_t *pass,
-    sokol_render_state_t *state) 
+    sokol_render_state_t *state)
 {
+    depth_vs_uniforms_t vs_u;
+    glm_mat4_copy(state->uniforms.mat_vp, vs_u.mat_vp);
+    
+    depth_fs_uniforms_t fs_u;
+    glm_vec3_copy(state->uniforms.eye_pos, fs_u.eye_pos);
+    fs_u.near_ = state->uniforms.near_;
+    fs_u.far_ = state->uniforms.far_;
+    fs_u.depth_c = SOKOL_DEPTH_C;
+    fs_u.inv_log_far = 1.0 / log(SOKOL_DEPTH_C * fs_u.far_ + 1.0);
+
     /* Render to offscreen texture so screen-space effects can be applied */
     sg_begin_pass(pass->pass, &pass->pass_action);
     sg_apply_pipeline(pass->pip);
 
-    shadow_vs_uniforms_t vs_u;
-    glm_mat4_copy(state->uniforms.light_mat_vp, vs_u.mat_vp);
-    sg_apply_uniforms(SG_SHADERSTAGE_VS, 0, &(sg_range){ 
-        &vs_u, sizeof(shadow_vs_uniforms_t) 
-    });
+    sg_apply_uniforms(SG_SHADERSTAGE_VS, 0, &(sg_range){&vs_u, sizeof(depth_vs_uniforms_t)});
+    sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, &(sg_range){&fs_u, sizeof(depth_fs_uniforms_t)});
 
-    /* Loop buffers, render scene */
+    /* Loop geometry, render scene */
     ecs_iter_t qit = ecs_query_iter(state->world, state->q_scene);
     while (ecs_query_next(&qit)) {
         SokolGeometry *geometry = ecs_field(&qit, SokolGeometry, 1);
-        
+
         int b;
         for (b = 0; b < qit.count; b ++) {
-            /* Only draw solids, ignore emissive and transparent (for now) */
-            shadow_draw_instances(&geometry[b], geometry[b].solid);
+            depth_draw_instances(&geometry[b], geometry[b].solid);
+            depth_draw_instances(&geometry[b], geometry[b].emissive);
         }
     }
 
-    sg_end_pass();
-}
-
-
-// ITU BT.709: vec3(0.2126, 0.7152, 0.0722)
-// ITU BT.601: vec3(0.299, 0.587, 0.114)
-
-static
-const char *shd_threshold =
-    "#include \"etc/sokol/shaders/fx_hdr_threshold.glsl\"\n";
-
-const char *shd_blur_hdr =
-    "const float gauss[5] = float[] (0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);\n";
-
-const char *shd_blur =
-    "#include \"etc/sokol/shaders/fx_hdr_blur.glsl\"\n";
-
-static
-const char *shd_hdr =
-    "#include \"etc/sokol/shaders/fx_hdr.glsl\"\n";
-
-#define FX_INPUT_HDR (0)
-#define FX_INPUT_LUM (1)
-
-SokolFx sokol_init_hdr(
-    int width, int height)
-{
-    ecs_trace("sokol: initialize hdr effect");
-    ecs_log_push();
-
-    SokolFx fx = {0};
-    fx.name = "Hdr";
-    fx.width = width;
-    fx.height = height;
-
-    int threshold = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
-        .name = "threshold",
-        .outputs = {{512}},
-        .shader = shd_threshold,
-        .color_format = SG_PIXELFORMAT_RGBA16F,
-        .inputs = { "hdr" },
-        .params = { "threshold", "mipmap" },
-        .steps = {
-            [0] = {
-                .name = "glow",
-                .params = { 0.1, 1.0 },
-                .inputs = { {FX_INPUT_HDR} }
-            }
-        }
-    });
-
-    int blur = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
-        .name = "blur",
-        .outputs = {{512}},
-        .shader_header = shd_blur_hdr,
-        .shader = shd_blur,
-        .color_format = SG_PIXELFORMAT_RGBA16F,
-        .inputs = { "tex" },
-        .params = { "horizontal" },
-        .steps = {
-            /* glow */
-            [0] = { 
-                .name = "halo hblur",
-                .inputs = { {SOKOL_FX_PASS(threshold), 0} },
-                .params = { 1.0 },
-                .loop_count = 4
-            },
-            [1] = { 
-                .name = "halo vblur",
-                .inputs = { { -1 } },
-                .params = { 0.0 }
-            }
-        }
-    });
-
-    sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
-        .name = "hdr",
-        .outputs = {{ .global_size = true }},
-        .shader = shd_hdr,
-        .inputs = { "hdr", "bloom" },
-        .params = { "exposure", "gamma" },
-        .steps = {
-            [0] = {
-                .inputs = { {SOKOL_FX_INPUT(0)}, {SOKOL_FX_PASS(blur), 0} },
-                .params = { 1.0, 2.2 }
-            }
-        }
-    });
-
-    ecs_log_pop();
-
-    return fx;
-}
-
-
-static
-const char *shd_ssao_header = 
-    "#include \"etc/sokol/shaders/fx_ssao_header.glsl\"\n";
-
-static
-const char *shd_ssao =
-    "#include \"etc/sokol/shaders/fx_ssao_main.glsl\"\n";
-
-static
-const char *shd_blend_mult_header = 
-    "#include \"etc/sokol/shaders/common.glsl\"\n";
-
-static
-const char *shd_blend_mult =
-    "#include \"etc/sokol/shaders/fx_ssao_blend.glsl\"\n";
-
-#define SSAO_INPUT_SCENE SOKOL_FX_INPUT(0)
-#define SSAO_INPUT_DEPTH SOKOL_FX_INPUT(1)
-
-SokolFx sokol_init_ssao(
-    int width, int height)
-{
-    ecs_trace("sokol: initialize ambient occlusion effect");
-    ecs_log_push();
-
-    SokolFx fx = {0};
-    fx.name = "AmbientOcclusion";
-    fx.width = width;
-    fx.height = height;
-
-#ifdef __EMSCRIPTEN__
-    float factor = 2;
-#else
-    float factor = 0.5;
-#endif
-
-    // Ambient occlusion shader 
-    int32_t ao = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
-        .name = "ssao",
-        .outputs = {{ .global_size = true, .factor = factor }},
-        .shader_header = shd_ssao_header,
-        .shader = shd_ssao,
-        .color_format = SG_PIXELFORMAT_RGBA8,
-        .inputs = { "t_depth" },
-        .steps = {
-            [0] = {
-                .inputs = { {SSAO_INPUT_DEPTH} }
-            }
-        }
-    });
-
-    // Blur to reduce the noise, so we can keep sample count low
-    int blur = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
-        .name = "blur",
-        .outputs = {{512}},
-        .shader_header = shd_blur_hdr,
-        .shader = shd_blur,
-        .color_format = SG_PIXELFORMAT_RGBA8,
-        .inputs = { "tex" },
-        .params = { "horizontal" },
-        .steps = {
-            [0] = { 
-                .name = "ssao hblur",
-                .inputs = { {SOKOL_FX_PASS(ao)} },
-                .params = { 1.0 },
-                .loop_count = 4
-            },
-            [1] = { 
-                .name = "ssao vblur",
-                .inputs = { { -1 } },
-                .params = { 0.0 }
-            }
-        }
-    });
-
-    // Multiply ambient occlusion with the scene
-    sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
-        .name = "blend",
-        .outputs = {{ .global_size = true }},
-        .shader_header = shd_blend_mult_header,
-        .shader = shd_blend_mult,
-        .color_format = SG_PIXELFORMAT_RGBA16F,
-        .inputs = { "t_scene", "t_occlusion" },
-        .steps = {
-            [0] = {
-                .inputs = { {SSAO_INPUT_SCENE}, {SOKOL_FX_PASS(blur)} }
-            }
-        }
-    });
-
-    ecs_log_pop();
-
-    return fx;
-}
-
-
-sokol_fx_resources_t* sokol_init_fx(
-    int w, int h)
-{
-    sokol_fx_resources_t *result = ecs_os_calloc_t(sokol_fx_resources_t);
-    result->hdr = sokol_init_hdr(w, h);
-    result->fog = sokol_init_fog(w, h);
-    result->ssao = sokol_init_ssao(w, h);
-    return result;
-}
-
-void sokol_update_fx(
-    sokol_fx_resources_t *fx, 
-    int width, 
-    int height)
-{
-    sokol_fx_update_size(&fx->hdr, width, height);
-    sokol_fx_update_size(&fx->fog, width, height);
-    sokol_fx_update_size(&fx->ssao, width, height);
-}
-
-
-static
-const char *shd_fog_header = 
-    "#include \"etc/sokol/shaders/fx_fog_header.glsl\"\n";
-
-static
-const char *shd_fog =
-    "#include \"etc/sokol/shaders/fx_fog_main.glsl\"\n";
-
-#define FOG_INPUT_HDR SOKOL_FX_INPUT(0)
-#define FOG_INPUT_DEPTH SOKOL_FX_INPUT(1)
-#define FOG_INPUT_ATMOS SOKOL_FX_INPUT(2)
-
-SokolFx sokol_init_fog(
-    int width, int height)
-{
-    ecs_trace("sokol: initialize fog effect");
-    ecs_log_push();
-
-    SokolFx fx = {0};
-    fx.name = "Fog";
-    fx.width = width;
-    fx.height = height;
-
-    sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
-        .name = "fog",
-        .outputs = {{ .global_size = true }},
-        .shader_header = shd_fog_header,
-        .shader = shd_fog,
-        .color_format = SG_PIXELFORMAT_RGBA16F,
-        .mipmap_count = 2,
-        .inputs = { "hdr", "depth", "atmos" },
-        .params = { "u_density", "u_r", "u_g", "u_b", "u_horizon" },
-        .steps = {
-            [0] = {
-                .inputs = { {FOG_INPUT_HDR}, {FOG_INPUT_DEPTH}, {FOG_INPUT_ATMOS} },
-                .params = { 1.2, 0.0, 0.0, 0.0 }
-            }
-        }
-    });
-
-    ecs_log_pop();
-
-    return fx;
-}
-
-void sokol_fog_set_params(
-    SokolFx *fx,
-    float density,
-    float r,
-    float g,
-    float b,
-    float uv_horizon)
-{
-    float *params = fx->pass[0].steps[0].params;
-    params[0] = density;
-    params[1] = r;
-    params[2] = g;
-    params[3] = b;
-    params[4] = uv_horizon;
-}
-
-
-static
-sg_pipeline init_screen_pipeline() {
-    ecs_trace("sokol: initialize screen pipeline");
-
-    /* create an instancing shader */
-    sg_shader shd = sg_make_shader(&(sg_shader_desc){
-        .vs.source = sokol_vs_passthrough(),
-        .fs = {
-            .source =
-                SOKOL_SHADER_HEADER
-                "uniform sampler2D screen;\n"
-                "out vec4 frag_color;\n"
-                "in vec2 uv;\n"
-                "void main() {\n"
-                "  frag_color = texture(screen, uv);\n"
-                "}\n"
-                ,
-            .images[0] = {
-                .name = "screen",
-                .image_type = SG_IMAGETYPE_2D
-            }
-        }
-    });
-
-    /* create a pipeline object (default render state is fine) */
-    return sg_make_pipeline(&(sg_pipeline_desc){
-        .shader = shd,
-        .layout = {         
-            .attrs = {
-                /* Static geometry (position, uv) */
-                [0] = { .buffer_index=0, .format=SG_VERTEXFORMAT_FLOAT3 },
-                [1] = { .buffer_index=0, .format=SG_VERTEXFORMAT_FLOAT2 }
-            }
-        }
-    });
-}
-
-sokol_screen_pass_t sokol_init_screen_pass(void) {
-    return (sokol_screen_pass_t) {
-        .pip = init_screen_pipeline(),
-        .pass_action = sokol_clear_action((ecs_rgb_t){0, 0, 0}, false, false)
-    };
-}
-
-void sokol_run_screen_pass(
-    sokol_screen_pass_t *pass,
-    sokol_resources_t *resources,
-    sokol_render_state_t *state,
-    sg_image img)
-{
-    sg_begin_default_pass(&pass->pass_action, state->width, state->height);
-    sg_apply_pipeline(pass->pip);
-
-    sg_bindings bind = {
-        .vertex_buffers = { 
-            [0] = resources->quad 
-        },
-        .fs_images[0] = img
-    };
-
-    sg_apply_bindings(&bind);
-
-    sg_draw(0, 6, 1);
     sg_end_pass();
 }
 
@@ -31068,226 +30941,376 @@ void sokol_fx_update_size(
 }
 
 
-typedef struct depth_vs_uniforms_t {
-    mat4 mat_vp;
-} depth_vs_uniforms_t;
+static
+float quad_vertices_uvs[] = {
+    -1.0f, -1.0f,  0.0f,   0, 0,
+     1.0f, -1.0f,  0.0f,   1, 0,
+     1.0f,  1.0f,  0.0f,   1, 1,
 
-typedef struct depth_fs_uniforms_t {
-    vec3 eye_pos;
-    float near_;
-    float far_;
-    float depth_c;
-    float inv_log_far;
-} depth_fs_uniforms_t;
-
-const char* sokol_vs_depth(void) 
-{
-    return SOKOL_SHADER_HEADER
-        "uniform mat4 u_mat_vp;\n"
-        "uniform vec3 u_eye_pos;\n"
-        "layout(location=0) in vec4 v_position;\n"
-        "layout(location=1) in mat4 i_mat_m;\n"
-        "out vec3 position;\n"
-        "void main() {\n"
-        "  gl_Position = u_mat_vp * i_mat_m * v_position;\n"
-        "  position = gl_Position.xyz;\n"
-        "}\n";
-}
-
-const char* sokol_fs_depth(void) 
-{
-    return SOKOL_SHADER_HEADER
-        "uniform vec3 u_eye_pos;\n"
-        "uniform float u_near;\n"
-        "uniform float u_far;\n"
-        "uniform float u_depth_c;\n"
-        "uniform float u_inv_log_far;\n"
-        "in vec3 position;\n"
-        "out vec4 frag_color;\n"
-
-        SOKOL_SHADER_FUNC_FLOAT_TO_RGBA
-
-#ifdef SOKOL_LOG_DEPTH
-        "vec4 depth_to_rgba(vec3 pos) {\n"
-        "  vec3 pos_norm = pos / u_far;\n"
-        "  float d = length(pos_norm) * u_far;\n"
-        "  d = clamp(d, 0.0, u_far * 0.98);\n"
-        "  d = log(u_depth_c * d + 1.0) / log(u_depth_c * u_far + 1.0);\n"
-        "  return float_to_rgba(d);\n"
-        "}\n"
-#else
-        "vec4 depth_to_rgba(vec3 pos) {\n"
-        "  vec3 pos_norm = pos / u_far;\n"
-        "  float d = length(pos_norm);\n"
-        "  d = clamp(d, 0.0, 1.0);\n"
-        "  return float_to_rgba(d);\n"
-        "}\n"
-#endif
-
-        "void main() {\n"
-        "  frag_color = depth_to_rgba(position);\n"
-        "}\n";
-}
-
-sg_pipeline init_depth_pipeline(int32_t sample_count) {
-    ecs_trace("sokol: initialize depth pipeline");
-
-    /* create an instancing shader */
-    sg_shader shd = sg_make_shader(&(sg_shader_desc){
-        .vs.uniform_blocks = {
-            [0] = {
-                .size = sizeof(depth_vs_uniforms_t),
-                .uniforms = {
-                    [0] = { .name="u_mat_vp", .type=SG_UNIFORMTYPE_MAT4 }
-                },
-            }
-        },
-        .fs.uniform_blocks = { 
-            [0] = {
-                .size = sizeof(depth_fs_uniforms_t),
-                .uniforms = {
-                    [0] = { .name="u_eye_pos", .type=SG_UNIFORMTYPE_FLOAT3 },
-                    [1] = { .name="u_near", .type=SG_UNIFORMTYPE_FLOAT },
-                    [2] = { .name="u_far", .type=SG_UNIFORMTYPE_FLOAT },
-                    [3] = { .name="u_depth_c", .type = SG_UNIFORMTYPE_FLOAT },
-                    [4] = { .name="u_inv_log_far", .type = SG_UNIFORMTYPE_FLOAT }
-                },
-            }            
-        },
-        .vs.source = sokol_vs_depth(),
-        .fs.source = sokol_fs_depth()
-    });
-
-    return sg_make_pipeline(&(sg_pipeline_desc){
-        .shader = shd,
-        .index_type = SG_INDEXTYPE_UINT16,
-        .layout = {
-            .buffers = {
-                [1] = { .stride = 64, .step_func=SG_VERTEXSTEP_PER_INSTANCE }
-            },
-
-            .attrs = {
-                /* Static geometry */
-                [0] = { .buffer_index=0, .offset=0,  .format=SG_VERTEXFORMAT_FLOAT3 },
-         
-                /* Matrix (per instance) */
-                [1] = { .buffer_index=1, .offset=0,  .format=SG_VERTEXFORMAT_FLOAT4 },
-                [2] = { .buffer_index=1, .offset=16, .format=SG_VERTEXFORMAT_FLOAT4 },
-                [3] = { .buffer_index=1, .offset=32, .format=SG_VERTEXFORMAT_FLOAT4 },
-                [4] = { .buffer_index=1, .offset=48, .format=SG_VERTEXFORMAT_FLOAT4 }
-            }
-        },
-        .depth = {
-            .pixel_format = SG_PIXELFORMAT_DEPTH,
-            .compare = SG_COMPAREFUNC_LESS_EQUAL,
-            .write_enabled = true
-        },
-        .colors = {{
-            .pixel_format = SG_PIXELFORMAT_RGBA8
-        }},
-        .cull_mode = SG_CULLMODE_BACK,
-        .sample_count = sample_count
-    });
-}
-
-sokol_offscreen_pass_t sokol_init_depth_pass(
-    int32_t w, 
-    int32_t h,
-    sg_image depth_target,
-    int32_t sample_count) 
-{
-    ecs_trace("sokol: initialize depth pass");
-
-    sg_image color_target = sokol_target_rgba8(
-        "Depth color target", w, h, sample_count);
-    ecs_rgb_t background_color = {1, 1, 1};
-
-    return (sokol_offscreen_pass_t){
-        .pass_action = sokol_clear_action(background_color, true, true),
-        .pass = sg_make_pass(&(sg_pass_desc){
-            .color_attachments[0].image = color_target,
-            .depth_stencil_attachment.image = depth_target
-        }),
-        .pip = init_depth_pipeline(sample_count),
-        .color_target = color_target,
-        .depth_target = depth_target
-    };
-}
-
-void sokol_update_depth_pass(
-    sokol_offscreen_pass_t *pass,
-    int32_t w,
-    int32_t h,
-    sg_image depth_target,
-    int32_t sample_count)
-{
-    sg_destroy_image(pass->color_target);
-    sg_destroy_pass(pass->pass);
-
-    pass->color_target = sokol_target_rgba8(
-        "Depth color target", w, h, sample_count);
-
-    pass->pass = sg_make_pass(&(sg_pass_desc){
-        .color_attachments[0].image = pass->color_target,
-        .depth_stencil_attachment.image = depth_target
-    });
-}
+    -1.0f, -1.0f,  0.0f,   0, 0,
+     1.0f,  1.0f,  0.0f,   1, 1,
+    -1.0f,  1.0f,  0.0f,   0, 1
+};
 
 static
-void depth_draw_instances(
-    SokolGeometry *geometry,
-    sokol_geometry_buffers_t *buffers)
+vec3 rectangle_vertices[] = {
+    {-0.5,  0.5, 0.0},
+    { 0.5,  0.5, 0.0},
+    { 0.5, -0.5, 0.0},
+    {-0.5, -0.5, 0.0},
+};
+
+static
+uint16_t rectangle_indices[] = {
+    0, 1, 2,
+    0, 2, 3
+};
+
+static
+vec3 box_vertices[] = {
+    {-0.5f,  0.5f, -0.5f},  
+    { 0.5f,  0.5f, -0.5f},    
+    { 0.5f, -0.5f, -0.5f},    
+    {-0.5f, -0.5f, -0.5f}, // Back   
+
+    {-0.5f,  0.5f,  0.5f}, 
+    { 0.5f,  0.5f,  0.5f},    
+    { 0.5f, -0.5f,  0.5f},    
+    {-0.5f, -0.5f,  0.5f}, // Front  
+
+    {-0.5f, -0.5f,  0.5f},    
+    {-0.5f,  0.5f,  0.5f},    
+    {-0.5f,  0.5f, -0.5f},    
+    {-0.5f, -0.5f, -0.5f}, // Left   
+
+    { 0.5f, -0.5f,  0.5f},    
+    { 0.5f,  0.5f,  0.5f},    
+    { 0.5f,  0.5f, -0.5f},    
+    { 0.5f, -0.5f, -0.5f}, // Right   
+
+    { 0.5f, -0.5f, -0.5f},    
+    { 0.5f, -0.5f,  0.5f},    
+    {-0.5f, -0.5f,  0.5f},    
+    {-0.5f, -0.5f, -0.5f}, // Bottom   
+
+    { 0.5f,  0.5f, -0.5f},    
+    { 0.5f,  0.5f,  0.5f},    
+    {-0.5f,  0.5f,  0.5f},    
+    {-0.5f,  0.5f, -0.5f}, // Top   
+};
+
+static
+uint16_t box_indices[] = {
+    0,  1,  2,   0,  2,  3,
+    6,  5,  4,   7,  6,  4,
+    8,  9,  10,  8,  10, 11,
+    14, 13, 12,  15, 14, 12,
+    16, 17, 18,  16, 18, 19,
+    22, 21, 20,  23, 22, 20,
+};
+
+#define EPSILON 0.0000001
+
+static
+void compute_flat_normals(
+    vec3 *vertices,
+    uint16_t *indices,
+    int32_t count,
+    vec3 *normals_out)
 {
-    if (!buffers->instance_count) {
-        return;
+    int32_t v;
+    for (v = 0; v < count; v += 3) {
+        vec3 vec1, vec2, normal;
+        glm_vec3_sub(vertices[indices[v + 0]], vertices[indices[v + 1]], vec1);
+        glm_vec3_sub(vertices[indices[v + 0]], vertices[indices[v + 2]], vec2);
+        glm_vec3_crossn(vec2, vec1, normal);
+
+        if (fabs(normal[0]) < GLM_FLT_EPSILON) {
+            normal[0] = 0;
+        }
+        if (fabs(normal[1]) < GLM_FLT_EPSILON) {
+            normal[1] = 0;
+        }
+        if (fabs(normal[2]) < GLM_FLT_EPSILON) {
+            normal[2] = 0;
+        }
+
+        glm_vec3_copy(normal, normals_out[indices[v + 0]]);
+        glm_vec3_copy(normal, normals_out[indices[v + 1]]);
+        glm_vec3_copy(normal, normals_out[indices[v + 2]]);
     }
-
-    sg_bindings bind = {
-        .vertex_buffers = {
-            [0] = geometry->vertices,
-            [1] = buffers->transforms
-        },
-        .index_buffer = geometry->indices
-    };
-
-    sg_apply_bindings(&bind);
-    sg_draw(0, geometry->index_count, buffers->instance_count);
 }
 
-void sokol_run_depth_pass(
-    sokol_offscreen_pass_t *pass,
-    sokol_render_state_t *state)
+sg_image sokol_target(
+    const char *label,
+    int32_t width, 
+    int32_t height,
+    int32_t sample_count,
+    int32_t num_mipmaps,
+    sg_pixel_format format)
 {
-    depth_vs_uniforms_t vs_u;
-    glm_mat4_copy(state->uniforms.mat_vp, vs_u.mat_vp);
+    sg_image_desc img_desc;
     
-    depth_fs_uniforms_t fs_u;
-    glm_vec3_copy(state->uniforms.eye_pos, fs_u.eye_pos);
-    fs_u.near_ = state->uniforms.near_;
-    fs_u.far_ = state->uniforms.far_;
-    fs_u.depth_c = SOKOL_DEPTH_C;
-    fs_u.inv_log_far = 1.0 / log(SOKOL_DEPTH_C * fs_u.far_ + 1.0);
+    if (num_mipmaps > 1) {
+        img_desc = (sg_image_desc){
+            .render_target = true,
+            .width = width,
+            .height = height,
+            .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+            .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+            .pixel_format = format,
+            .min_filter = SG_FILTER_LINEAR_MIPMAP_LINEAR,
+            .mag_filter = SG_FILTER_LINEAR,
+            .sample_count = sample_count,
+            .num_mipmaps = num_mipmaps,
+            .label = label
+        };
+    } else {
+        img_desc = (sg_image_desc){
+            .render_target = true,
+            .width = width,
+            .height = height,
+            .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+            .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+            .pixel_format = format,
+            .min_filter = SG_FILTER_LINEAR,
+            .mag_filter = SG_FILTER_LINEAR,
+            .sample_count = sample_count,
+            .num_mipmaps = num_mipmaps,
+            .label = label
+        };
+    }
 
-    /* Render to offscreen texture so screen-space effects can be applied */
-    sg_begin_pass(pass->pass, &pass->pass_action);
-    sg_apply_pipeline(pass->pip);
+    return sg_make_image(&img_desc);
+}
 
-    sg_apply_uniforms(SG_SHADERSTAGE_VS, 0, &(sg_range){&vs_u, sizeof(depth_vs_uniforms_t)});
-    sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, &(sg_range){&fs_u, sizeof(depth_fs_uniforms_t)});
+sg_image sokol_target_rgba8(
+    const char *label,
+    int32_t width, 
+    int32_t height,
+    int32_t sample_count)
+{
+    return sokol_target(label, width, height, sample_count, 1, SG_PIXELFORMAT_RGBA8);
+}
 
-    /* Loop geometry, render scene */
-    ecs_iter_t qit = ecs_query_iter(state->world, state->q_scene);
-    while (ecs_query_next(&qit)) {
-        SokolGeometry *geometry = ecs_field(&qit, SokolGeometry, 1);
+sg_image sokol_target_rgba16(
+    const char *label,
+    int32_t width, 
+    int32_t height,
+    int32_t sample_count)
+{
+    return sokol_target(label, width, height, sample_count, 1, SG_PIXELFORMAT_RGBA16);
+}
 
-        int b;
-        for (b = 0; b < qit.count; b ++) {
-            depth_draw_instances(&geometry[b], geometry[b].solid);
-            depth_draw_instances(&geometry[b], geometry[b].emissive);
+sg_image sokol_target_rgba16f(
+    const char *label,
+    int32_t width, 
+    int32_t height,
+    int32_t sample_count,
+    int32_t num_mipmaps) 
+{
+    return sokol_target(label, width, height, sample_count, num_mipmaps, SG_PIXELFORMAT_RGBA16F);
+}
+
+sg_image sokol_target_depth(
+    int32_t width, 
+    int32_t height,
+    int32_t sample_count) 
+{
+    sg_image_desc img_desc = {
+        .render_target = true,
+        .width = width,
+        .height = height,
+        .pixel_format = SG_PIXELFORMAT_DEPTH,
+        .min_filter = SG_FILTER_LINEAR,
+        .mag_filter = SG_FILTER_LINEAR,
+        .sample_count = sample_count,
+        .label = "Depth target"
+    };
+
+    return sg_make_image(&img_desc);
+}
+
+sg_buffer sokol_buffer_quad(void)
+{
+    return sg_make_buffer(&(sg_buffer_desc){
+        .data = { quad_vertices_uvs, sizeof(quad_vertices_uvs) },
+        .usage = SG_USAGE_IMMUTABLE
+    });
+}
+
+sg_buffer sokol_buffer_box(void)
+{
+    return sg_make_buffer(&(sg_buffer_desc){
+        .data = { box_vertices, sizeof(box_vertices) },
+        .usage = SG_USAGE_IMMUTABLE
+    });
+}
+
+sg_buffer sokol_buffer_box_indices(void)
+{
+    return sg_make_buffer(&(sg_buffer_desc){
+        .data = { box_indices, sizeof(box_indices) },
+        .type = SG_BUFFERTYPE_INDEXBUFFER,
+        .usage = SG_USAGE_IMMUTABLE
+    });
+}
+
+int32_t sokol_box_index_count(void)
+{
+    return 36;
+}
+
+sg_buffer sokol_buffer_box_normals(void)
+{
+    vec3 normals[24];
+    compute_flat_normals(
+        box_vertices, box_indices, sokol_box_index_count(), normals);
+
+    return sg_make_buffer(&(sg_buffer_desc){
+        .data = { normals, sizeof(normals) },
+        .usage = SG_USAGE_IMMUTABLE
+    });
+}
+
+sg_buffer sokol_buffer_rectangle(void)
+{
+    return sg_make_buffer(&(sg_buffer_desc){
+        .data = { rectangle_vertices, sizeof(rectangle_vertices) },
+        .usage = SG_USAGE_IMMUTABLE
+    });
+}
+
+sg_buffer sokol_buffer_rectangle_indices(void)
+{
+    return sg_make_buffer(&(sg_buffer_desc){
+        .data = { rectangle_indices, sizeof(rectangle_indices) },
+        .type = SG_BUFFERTYPE_INDEXBUFFER,
+        .usage = SG_USAGE_IMMUTABLE
+    });
+}
+
+int32_t sokol_rectangle_index_count(void)
+{
+    return 6;
+}
+
+sg_buffer sokol_buffer_rectangle_normals(void)
+{
+    vec3 normals[4];
+    compute_flat_normals(rectangle_vertices, 
+        rectangle_indices, sokol_rectangle_index_count(), normals);
+
+    return sg_make_buffer(&(sg_buffer_desc){
+        .data = { normals, sizeof(normals) },
+        .usage = SG_USAGE_IMMUTABLE
+    });
+}
+
+sg_pass_action sokol_clear_action(
+    ecs_rgb_t color,
+    bool clear_color,
+    bool clear_depth)
+{
+    sg_pass_action action = {0};
+    if (clear_color) {
+        action.colors[0] = (sg_color_attachment_action){
+            .action = SG_ACTION_CLEAR,
+            .value = {color.r, color.g, color.b, 1.0f}
+        };
+    } else {
+        action.colors[0].action = SG_ACTION_DONTCARE;
+    }
+
+    if (clear_depth) {
+        action.depth.action = SG_ACTION_CLEAR;
+        action.depth.value = 1.0;
+    } else {
+        action.depth.action = SG_ACTION_DONTCARE;
+        action.stencil.action = SG_ACTION_DONTCARE;
+    }
+
+    return action;
+}
+
+const char* sokol_vs_passthrough(void)
+{
+    return  SOKOL_SHADER_HEADER
+            "layout(location=0) in vec4 v_position;\n"
+            "layout(location=1) in vec2 v_uv;\n"
+            "out vec2 uv;\n"
+            "void main() {\n"
+            "  gl_Position = v_position;\n"
+            "  uv = v_uv;\n"
+            "}\n";
+}
+
+sg_image sokol_noise_texture(
+    int32_t width, 
+    int32_t height)
+{
+    uint32_t *data = ecs_os_malloc_n(uint32_t, width * height);
+    for (int32_t x = 0; x < width; x ++) {
+        for (int32_t y = 0; y < height; y ++) {
+            data[x + y * x] = rand();
         }
     }
 
-    sg_end_pass();
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = width,
+        .height = height,
+        .wrap_u = SG_WRAP_REPEAT,
+        .wrap_v = SG_WRAP_REPEAT,
+        .pixel_format = SG_PIXELFORMAT_R8,
+        .label = "Noise texture",
+        .data.subimage[0][0] = {
+            .ptr = data,
+            .size = width * height * sizeof(char)
+        }
+    });
+
+    ecs_os_free(data);
+
+    return img;
+}
+
+sg_image sokol_bg_texture(ecs_rgb_t color, int32_t width, int32_t height)
+{
+    uint32_t **data = ecs_os_malloc_n(uint32_t*, width);
+    for (int i = 0; i < width; i ++) {
+        data[i] = ecs_os_malloc_n(uint32_t, height);
+    }
+
+    for (int32_t x = 0; x < width; x ++) {
+        for (int32_t y = 0; y < height; y ++) {
+            uint32_t c = (uint32_t)(color.r * 256);
+            c += (uint32_t)(color.g * 256) << 8;
+            c += (uint32_t)(color.b * 256) << 16;
+            c += 255u << 24;
+            data[x][y] = c;
+            
+        }
+    }
+
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = width,
+        .height = height,
+        .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+        .pixel_format = SG_PIXELFORMAT_RGBA8,
+        .label = "Background texture",
+        .data.subimage[0][0] = {
+            .ptr = data,
+            .size = width * height * 4
+        }
+    });
+
+    for (int i = 0; i < width; i ++) {
+        ecs_os_free(data[i]);
+    }
+    ecs_os_free(data);
+
+    return img;
 }
 
 
@@ -31658,1000 +31681,643 @@ void sokol_run_scene_pass(
 
 
 static
-float quad_vertices_uvs[] = {
-    -1.0f, -1.0f,  0.0f,   0, 0,
-     1.0f, -1.0f,  0.0f,   1, 0,
-     1.0f,  1.0f,  0.0f,   1, 1,
+sg_pipeline init_screen_pipeline() {
+    ecs_trace("sokol: initialize screen pipeline");
 
-    -1.0f, -1.0f,  0.0f,   0, 0,
-     1.0f,  1.0f,  0.0f,   1, 1,
-    -1.0f,  1.0f,  0.0f,   0, 1
-};
-
-static
-vec3 rectangle_vertices[] = {
-    {-0.5,  0.5, 0.0},
-    { 0.5,  0.5, 0.0},
-    { 0.5, -0.5, 0.0},
-    {-0.5, -0.5, 0.0},
-};
-
-static
-uint16_t rectangle_indices[] = {
-    0, 1, 2,
-    0, 2, 3
-};
-
-static
-vec3 box_vertices[] = {
-    {-0.5f,  0.5f, -0.5f},  
-    { 0.5f,  0.5f, -0.5f},    
-    { 0.5f, -0.5f, -0.5f},    
-    {-0.5f, -0.5f, -0.5f}, // Back   
-
-    {-0.5f,  0.5f,  0.5f}, 
-    { 0.5f,  0.5f,  0.5f},    
-    { 0.5f, -0.5f,  0.5f},    
-    {-0.5f, -0.5f,  0.5f}, // Front  
-
-    {-0.5f, -0.5f,  0.5f},    
-    {-0.5f,  0.5f,  0.5f},    
-    {-0.5f,  0.5f, -0.5f},    
-    {-0.5f, -0.5f, -0.5f}, // Left   
-
-    { 0.5f, -0.5f,  0.5f},    
-    { 0.5f,  0.5f,  0.5f},    
-    { 0.5f,  0.5f, -0.5f},    
-    { 0.5f, -0.5f, -0.5f}, // Right   
-
-    { 0.5f, -0.5f, -0.5f},    
-    { 0.5f, -0.5f,  0.5f},    
-    {-0.5f, -0.5f,  0.5f},    
-    {-0.5f, -0.5f, -0.5f}, // Bottom   
-
-    { 0.5f,  0.5f, -0.5f},    
-    { 0.5f,  0.5f,  0.5f},    
-    {-0.5f,  0.5f,  0.5f},    
-    {-0.5f,  0.5f, -0.5f}, // Top   
-};
-
-static
-uint16_t box_indices[] = {
-    0,  1,  2,   0,  2,  3,
-    6,  5,  4,   7,  6,  4,
-    8,  9,  10,  8,  10, 11,
-    14, 13, 12,  15, 14, 12,
-    16, 17, 18,  16, 18, 19,
-    22, 21, 20,  23, 22, 20,
-};
-
-#define EPSILON 0.0000001
-
-static
-void compute_flat_normals(
-    vec3 *vertices,
-    uint16_t *indices,
-    int32_t count,
-    vec3 *normals_out)
-{
-    int32_t v;
-    for (v = 0; v < count; v += 3) {
-        vec3 vec1, vec2, normal;
-        glm_vec3_sub(vertices[indices[v + 0]], vertices[indices[v + 1]], vec1);
-        glm_vec3_sub(vertices[indices[v + 0]], vertices[indices[v + 2]], vec2);
-        glm_vec3_crossn(vec2, vec1, normal);
-
-        if (fabs(normal[0]) < GLM_FLT_EPSILON) {
-            normal[0] = 0;
-        }
-        if (fabs(normal[1]) < GLM_FLT_EPSILON) {
-            normal[1] = 0;
-        }
-        if (fabs(normal[2]) < GLM_FLT_EPSILON) {
-            normal[2] = 0;
-        }
-
-        glm_vec3_copy(normal, normals_out[indices[v + 0]]);
-        glm_vec3_copy(normal, normals_out[indices[v + 1]]);
-        glm_vec3_copy(normal, normals_out[indices[v + 2]]);
-    }
-}
-
-sg_image sokol_target(
-    const char *label,
-    int32_t width, 
-    int32_t height,
-    int32_t sample_count,
-    int32_t num_mipmaps,
-    sg_pixel_format format)
-{
-    sg_image_desc img_desc;
-    
-    if (num_mipmaps > 1) {
-        img_desc = (sg_image_desc){
-            .render_target = true,
-            .width = width,
-            .height = height,
-            .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
-            .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
-            .pixel_format = format,
-            .min_filter = SG_FILTER_LINEAR_MIPMAP_LINEAR,
-            .mag_filter = SG_FILTER_LINEAR,
-            .sample_count = sample_count,
-            .num_mipmaps = num_mipmaps,
-            .label = label
-        };
-    } else {
-        img_desc = (sg_image_desc){
-            .render_target = true,
-            .width = width,
-            .height = height,
-            .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
-            .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
-            .pixel_format = format,
-            .min_filter = SG_FILTER_LINEAR,
-            .mag_filter = SG_FILTER_LINEAR,
-            .sample_count = sample_count,
-            .num_mipmaps = num_mipmaps,
-            .label = label
-        };
-    }
-
-    return sg_make_image(&img_desc);
-}
-
-sg_image sokol_target_rgba8(
-    const char *label,
-    int32_t width, 
-    int32_t height,
-    int32_t sample_count)
-{
-    return sokol_target(label, width, height, sample_count, 1, SG_PIXELFORMAT_RGBA8);
-}
-
-sg_image sokol_target_rgba16(
-    const char *label,
-    int32_t width, 
-    int32_t height,
-    int32_t sample_count)
-{
-    return sokol_target(label, width, height, sample_count, 1, SG_PIXELFORMAT_RGBA16);
-}
-
-sg_image sokol_target_rgba16f(
-    const char *label,
-    int32_t width, 
-    int32_t height,
-    int32_t sample_count,
-    int32_t num_mipmaps) 
-{
-    return sokol_target(label, width, height, sample_count, num_mipmaps, SG_PIXELFORMAT_RGBA16F);
-}
-
-sg_image sokol_target_depth(
-    int32_t width, 
-    int32_t height,
-    int32_t sample_count) 
-{
-    sg_image_desc img_desc = {
-        .render_target = true,
-        .width = width,
-        .height = height,
-        .pixel_format = SG_PIXELFORMAT_DEPTH,
-        .min_filter = SG_FILTER_LINEAR,
-        .mag_filter = SG_FILTER_LINEAR,
-        .sample_count = sample_count,
-        .label = "Depth target"
-    };
-
-    return sg_make_image(&img_desc);
-}
-
-sg_buffer sokol_buffer_quad(void)
-{
-    return sg_make_buffer(&(sg_buffer_desc){
-        .data = { quad_vertices_uvs, sizeof(quad_vertices_uvs) },
-        .usage = SG_USAGE_IMMUTABLE
-    });
-}
-
-sg_buffer sokol_buffer_box(void)
-{
-    return sg_make_buffer(&(sg_buffer_desc){
-        .data = { box_vertices, sizeof(box_vertices) },
-        .usage = SG_USAGE_IMMUTABLE
-    });
-}
-
-sg_buffer sokol_buffer_box_indices(void)
-{
-    return sg_make_buffer(&(sg_buffer_desc){
-        .data = { box_indices, sizeof(box_indices) },
-        .type = SG_BUFFERTYPE_INDEXBUFFER,
-        .usage = SG_USAGE_IMMUTABLE
-    });
-}
-
-int32_t sokol_box_index_count(void)
-{
-    return 36;
-}
-
-sg_buffer sokol_buffer_box_normals(void)
-{
-    vec3 normals[24];
-    compute_flat_normals(
-        box_vertices, box_indices, sokol_box_index_count(), normals);
-
-    return sg_make_buffer(&(sg_buffer_desc){
-        .data = { normals, sizeof(normals) },
-        .usage = SG_USAGE_IMMUTABLE
-    });
-}
-
-sg_buffer sokol_buffer_rectangle(void)
-{
-    return sg_make_buffer(&(sg_buffer_desc){
-        .data = { rectangle_vertices, sizeof(rectangle_vertices) },
-        .usage = SG_USAGE_IMMUTABLE
-    });
-}
-
-sg_buffer sokol_buffer_rectangle_indices(void)
-{
-    return sg_make_buffer(&(sg_buffer_desc){
-        .data = { rectangle_indices, sizeof(rectangle_indices) },
-        .type = SG_BUFFERTYPE_INDEXBUFFER,
-        .usage = SG_USAGE_IMMUTABLE
-    });
-}
-
-int32_t sokol_rectangle_index_count(void)
-{
-    return 6;
-}
-
-sg_buffer sokol_buffer_rectangle_normals(void)
-{
-    vec3 normals[4];
-    compute_flat_normals(rectangle_vertices, 
-        rectangle_indices, sokol_rectangle_index_count(), normals);
-
-    return sg_make_buffer(&(sg_buffer_desc){
-        .data = { normals, sizeof(normals) },
-        .usage = SG_USAGE_IMMUTABLE
-    });
-}
-
-sg_pass_action sokol_clear_action(
-    ecs_rgb_t color,
-    bool clear_color,
-    bool clear_depth)
-{
-    sg_pass_action action = {0};
-    if (clear_color) {
-        action.colors[0] = (sg_color_attachment_action){
-            .action = SG_ACTION_CLEAR,
-            .value = {color.r, color.g, color.b, 1.0f}
-        };
-    } else {
-        action.colors[0].action = SG_ACTION_DONTCARE;
-    }
-
-    if (clear_depth) {
-        action.depth.action = SG_ACTION_CLEAR;
-        action.depth.value = 1.0;
-    } else {
-        action.depth.action = SG_ACTION_DONTCARE;
-        action.stencil.action = SG_ACTION_DONTCARE;
-    }
-
-    return action;
-}
-
-const char* sokol_vs_passthrough(void)
-{
-    return  SOKOL_SHADER_HEADER
-            "layout(location=0) in vec4 v_position;\n"
-            "layout(location=1) in vec2 v_uv;\n"
-            "out vec2 uv;\n"
-            "void main() {\n"
-            "  gl_Position = v_position;\n"
-            "  uv = v_uv;\n"
-            "}\n";
-}
-
-sg_image sokol_noise_texture(
-    int32_t width, 
-    int32_t height)
-{
-    uint32_t *data = ecs_os_malloc_n(uint32_t, width * height);
-    for (int32_t x = 0; x < width; x ++) {
-        for (int32_t y = 0; y < height; y ++) {
-            data[x + y * x] = rand();
-        }
-    }
-
-    sg_image img = sg_make_image(&(sg_image_desc){
-        .width = width,
-        .height = height,
-        .wrap_u = SG_WRAP_REPEAT,
-        .wrap_v = SG_WRAP_REPEAT,
-        .pixel_format = SG_PIXELFORMAT_R8,
-        .label = "Noise texture",
-        .data.subimage[0][0] = {
-            .ptr = data,
-            .size = width * height * sizeof(char)
+    /* create an instancing shader */
+    sg_shader shd = sg_make_shader(&(sg_shader_desc){
+        .vs.source = sokol_vs_passthrough(),
+        .fs = {
+            .source =
+                SOKOL_SHADER_HEADER
+                "uniform sampler2D screen;\n"
+                "out vec4 frag_color;\n"
+                "in vec2 uv;\n"
+                "void main() {\n"
+                "  frag_color = texture(screen, uv);\n"
+                "}\n"
+                ,
+            .images[0] = {
+                .name = "screen",
+                .image_type = SG_IMAGETYPE_2D
+            }
         }
     });
 
-    ecs_os_free(data);
-
-    return img;
-}
-
-sg_image sokol_bg_texture(ecs_rgb_t color, int32_t width, int32_t height)
-{
-    uint32_t data[width][height];
-
-    for (int32_t x = 0; x < width; x ++) {
-        for (int32_t y = 0; y < height; y ++) {
-            uint32_t c = (uint32_t)(color.r * 256);
-            c += (uint32_t)(color.g * 256) << 8;
-            c += (uint32_t)(color.b * 256) << 16;
-            c += 255 << 24;
-            data[x][y] = c;
-            
-        }
-    }
-
-    sg_image img = sg_make_image(&(sg_image_desc){
-        .width = width,
-        .height = height,
-        .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
-        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
-        .pixel_format = SG_PIXELFORMAT_RGBA8,
-        .label = "Background texture",
-        .data.subimage[0][0] = {
-            .ptr = data,
-            .size = width * height * 4
+    /* create a pipeline object (default render state is fine) */
+    return sg_make_pipeline(&(sg_pipeline_desc){
+        .shader = shd,
+        .layout = {         
+            .attrs = {
+                /* Static geometry (position, uv) */
+                [0] = { .buffer_index=0, .format=SG_VERTEXFORMAT_FLOAT3 },
+                [1] = { .buffer_index=0, .format=SG_VERTEXFORMAT_FLOAT2 }
+            }
         }
     });
-
-    return img;
 }
 
-#include "math.h"
-
-ECS_COMPONENT_DECLARE(SokolRenderer);
-
-/* Static geometry/texture resources */
-static
-sokol_resources_t sokol_init_resources(void) {
-    return (sokol_resources_t){
-        .quad = sokol_buffer_quad(),
-
-        .rect = sokol_buffer_rectangle(),
-        .rect_indices = sokol_buffer_rectangle_indices(),
-        .rect_normals = sokol_buffer_rectangle_normals(),
-
-        .box = sokol_buffer_box(),
-        .box_indices = sokol_buffer_box_indices(),
-        .box_normals = sokol_buffer_box_normals(),
-
-        .noise_texture = sokol_noise_texture(16, 16)
+sokol_screen_pass_t sokol_init_screen_pass(void) {
+    return (sokol_screen_pass_t) {
+        .pip = init_screen_pipeline(),
+        .pass_action = sokol_clear_action((ecs_rgb_t){0, 0, 0}, false, false)
     };
 }
 
-static
-void vec4_print(vec4 v) {
-    printf("%.2f, %.2f %.2f %.2f\n",
-        v[0], v[1], v[2], v[3]);
-}
-
-typedef struct {
-    // far plane
-    vec3 c_far;  // center
-    vec3 tl_far; // top left
-    vec3 tr_far; // top right
-    vec3 bl_far; // bottom left
-    vec3 br_far; // bottom right
-
-    // near plane
-    vec3 c_near;  // center
-    vec3 tl_near; // top left
-    vec3 tr_near; // top right
-    vec3 bl_near; // bottom left
-    vec3 br_near; // bottom right
-
-    // frustum center
-    vec3 c_frustum;
-} sokol_frustum_t;
-
-static
-void vec3_copy4(vec3 src, float v4, vec4 dst) {
-    dst[0] = src[0];
-    dst[1] = src[1];
-    dst[2] = src[2];
-    dst[3] = v4;
-}
-
-/* Light matrix (used for shadow map calculation) */
-static
-void sokol_init_light_mat_vp(
-    sokol_render_state_t *state)
+void sokol_run_screen_pass(
+    sokol_screen_pass_t *pass,
+    sokol_resources_t *resources,
+    sokol_render_state_t *state,
+    sg_image img)
 {
-    vec3 orig = {0, 0, 0};
-    sokol_global_uniforms_t *u = &state->uniforms;
+    sg_begin_default_pass(&pass->pass_action, state->width, state->height);
+    sg_apply_pipeline(pass->pip);
 
-    vec3 d;
-    glm_vec3_copy(u->eye_dir, d);
-
-    // Cross product of direction & up
-    vec3 right; glm_vec3_cross(d, u->eye_up, right);
-
-    float ar = state->uniforms.aspect;
-    float fov = state->uniforms.fov;
-    float near_ = state->uniforms.shadow_near;
-    float far_ = state->uniforms.shadow_far;
-
-    float Hnear = 2 * tan(fov / 2) * near_;
-    float Wnear = Hnear * ar;
-    float Hfar = 2 * tan(fov / 2) * far_;
-    float Wfar = Hfar * ar;
-    vec3 camera_pos; glm_vec3_copy(state->uniforms.eye_pos, camera_pos);
-    camera_pos[0] *= -1;
-    
-    sokol_frustum_t f_cam;
-
-    // Points on far plane
-    glm_vec3_scale(d, far_, f_cam.c_far);
-    glm_vec3_add(camera_pos, f_cam.c_far, f_cam.c_far);
-
-    vec3 u_hfar; glm_vec3_scale(u->eye_up, Hfar / 2, u_hfar);
-    vec3 r_wfar; glm_vec3_scale(right, Wfar / 2, r_wfar);
-
-    glm_vec3_add(f_cam.c_far, u_hfar, f_cam.tl_far);
-    glm_vec3_sub(f_cam.tl_far, r_wfar, f_cam.tl_far);
-
-    glm_vec3_add(f_cam.c_far, u_hfar, f_cam.tr_far);
-    glm_vec3_add(f_cam.tr_far, r_wfar, f_cam.tr_far);
-
-    glm_vec3_sub(f_cam.c_far, u_hfar, f_cam.bl_far);
-    glm_vec3_sub(f_cam.bl_far, r_wfar, f_cam.bl_far);
-
-    glm_vec3_sub(f_cam.c_far, u_hfar, f_cam.br_far);
-    glm_vec3_add(f_cam.br_far, r_wfar, f_cam.br_far);
-
-    // // Points on near plane
-    glm_vec3_scale(d, near_, f_cam.c_near);
-    glm_vec3_add(camera_pos, f_cam.c_near, f_cam.c_near);
-
-    vec3 u_hnear; glm_vec3_scale(u->eye_up, Hnear / 2, u_hnear);
-    vec3 r_wnear; glm_vec3_scale(right, Wnear / 2, r_wnear);
-
-    glm_vec3_add(f_cam.c_near, u_hnear, f_cam.tl_near);
-    glm_vec3_sub(f_cam.tl_near, r_wnear, f_cam.tl_near);
-
-    glm_vec3_add(f_cam.c_near, u_hnear, f_cam.tr_near);
-    glm_vec3_add(f_cam.tr_near, r_wnear, f_cam.tr_near);
-
-    glm_vec3_sub(f_cam.c_near, u_hnear, f_cam.bl_near);
-    glm_vec3_sub(f_cam.bl_near, r_wnear, f_cam.bl_near);
-
-    glm_vec3_sub(f_cam.c_near, u_hnear, f_cam.br_near);
-    glm_vec3_add(f_cam.br_near, r_wnear, f_cam.br_near);
-
-    // // Light "position"
-    vec3 light_pos_norm;
-    glm_vec3_scale(u->sun_direction, -1, light_pos_norm);
-    glm_vec3_normalize(light_pos_norm);
-
-    // Light view matrix
-    mat4 mat_light_view;
-    glm_lookat(light_pos_norm, orig, u->eye_up, mat_light_view);
-
-    // // Frustum to light view
-    vec4 f_light[8];
-    vec3_copy4(f_cam.br_near, 1.0, f_light[0]);
-    vec3_copy4(f_cam.tr_near, 1.0, f_light[1]);
-    vec3_copy4(f_cam.bl_near, 1.0, f_light[2]);
-    vec3_copy4(f_cam.tl_near, 1.0, f_light[3]);
-
-    vec3_copy4(f_cam.br_far, 1.0, f_light[4]);
-    vec3_copy4(f_cam.tr_far, 1.0, f_light[5]);
-    vec3_copy4(f_cam.bl_far, 1.0, f_light[6]);
-    vec3_copy4(f_cam.tl_far, 1.0, f_light[7]);
-
-    for (int i = 0; i < 8; i ++) {
-        glm_mat4_mulv(mat_light_view, f_light[i], f_light[i]);
-    }
-
-    // Find min/max points for defining the orthographic light matrix
-    vec3 min = { INFINITY, INFINITY, INFINITY };
-    vec3 max = { -INFINITY, -INFINITY, -INFINITY };
-    for (int i = 0; i < 8; i ++) {
-        for (int c = 0; c < 3; c ++) {
-            min[c] = glm_min(min[c], f_light[i][c]);
-        }
-        for (int c = 0; c < 3; c ++) {
-            max[c] = glm_max(max[c], f_light[i][c]);
-        }
-    }
-
-    // Get parameters for orthographic matrix
-    float l = min[0];
-    float r = max[0];
-    float b = min[1];
-    float t = max[1];
-    float n = -max[2];
-    float f = -min[2];
-
-    // // Discretize coordinates
-    const float step_size = 16;
-    l = floor(l / step_size) * step_size;
-    r = ceil(r / step_size) * step_size;
-    b = floor(b / step_size) * step_size;
-    t = ceil(t / step_size) * step_size;
-    n = floor(n / step_size) * step_size;
-    f = ceil(f / step_size) * step_size;
-
-    mat4 mat_light_ortho, mat_light_view_proj, mat_light_proj = {
-         { 0.5f, 0.0f, 0.0f, 0 },
-         { 0.0f, 0.5f, 0.0f, 0 },
-         { 0.0f, 0.0f, 0.5f, 0 },
-         { 0.5f, 0.5f, 0.5f, 1 }
+    sg_bindings bind = {
+        .vertex_buffers = { 
+            [0] = resources->quad 
+        },
+        .fs_images[0] = img
     };
 
-    glm_ortho(l, r, b, t, n, f, mat_light_ortho);
-    glm_mat4_mul(mat_light_proj, mat_light_ortho, mat_light_proj);
-    glm_mat4_mul(mat_light_proj, mat_light_view, mat_light_view_proj);
+    sg_apply_bindings(&bind);
 
-    glm_mat4_copy(mat_light_view, u->light_mat_v);
-    glm_mat4_copy(mat_light_view_proj, u->light_mat_vp);
+    sg_draw(0, 6, 1);
+    sg_end_pass();
 }
 
+#include <stdio.h>
+
 static
-void sokol_world_to_screen(
-    vec3 pos,
-    vec3 out,
-    sokol_render_state_t *state)
+const char* sokol_str_readln(
+    const char *str,
+    char* buf,
+    unsigned int length)
 {
-    vec4 pos4;
-    glm_vec3_copy(pos, pos4);
-    pos4[3] = 0.0;
+    int c;
+    char* ptr;
 
-    glm_mat4_mulv(state->uniforms.mat_vp, pos4, pos4);
-    pos4[0] /= pos4[3];
-    pos4[1] /= pos4[3];
+    if (!str) {
+        return 0;
+    }
 
-    pos4[0] = 0.5 * (pos4[0] + 1.0);
-    pos4[1] = 0.5 * (pos4[1] + 1.0);
-    glm_vec3_copy(pos4, out);
+    ptr = buf;
+
+    while ((c = *str)) {
+        if ((unsigned int)(ptr - buf) < (length - 1)) {
+            *ptr = c;
+            ptr++;
+        }
+
+        if (c == '\n') {
+            break;
+        }
+
+        str ++;
+    }
+
+    *ptr = '\0';
+
+    if (ptr == buf) {
+        return NULL;
+    } else {
+        return str + 1;
+    }
 }
 
-/* Compute uniform values for camera & light that are used across shaders */
 static
-void sokol_init_global_uniforms(
-    sokol_render_state_t *state)
+char* sokol_file_readln(
+    FILE* file,
+    char* buf,
+    unsigned int length)
 {
-    sokol_global_uniforms_t *u = &state->uniforms;
+    int c;
+    char* ptr;
 
-    /* Default camera parameters */
-    u->near_ = SOKOL_DEFAULT_DEPTH_NEAR;
-    u->far_ = SOKOL_DEFAULT_DEPTH_FAR;
-    u->fov = 30;
-    u->ortho = false;
+    if (!file) {
+        return 0;
+    }
 
-    /* If camera is set, get values */
-    if (state->camera) {
-        EcsCamera cam = *state->camera;
+    c = EOF;
+    ptr = buf;
 
-        if (cam.fov) {
-            u->fov = cam.fov;
+    while (!feof(file)) {
+        c = fgetc(file);
+        
+        if (c == EOF) {
+            break;
         }
 
-        if (cam.near_ || cam.far_) {
-            u->near_ = cam.near_;
-            u->far_ = cam.far_;
+        if ((unsigned int)(ptr - buf) < (length - 1)) {
+            *ptr = c;
+            ptr++;
         }
 
-        if (cam.up[0] || !cam.up[1] || !cam.up[2]) {
-            glm_vec3_copy(cam.up, u->eye_up);
-        }
-
-        state->uniforms.ortho = cam.ortho;
-
-        glm_vec3_copy(cam.position, u->eye_pos);
-        u->eye_pos[0] = -u->eye_pos[0];
-        glm_vec3_copy(cam.lookat, u->eye_lookat);
-        u->eye_lookat[0] = -u->eye_lookat[0];
-    }
-
-    /* Orthographic/perspective projection matrix */
-    if (u->ortho) {
-        glm_ortho_default(u->aspect, u->mat_p);
-    } else {
-        glm_perspective(u->fov, u->aspect, u->near_, u->far_, u->mat_p);
-    }
-
-    glm_mat4_inv(u->mat_p, u->inv_mat_p);
-
-    /* View + view * projection matrix */
-    glm_lookat(u->eye_pos, u->eye_lookat, u->eye_up, u->mat_v);
-
-    /* Flip x axis so -1 is on left and 1 is on right */
-    vec3 flip_x = {-1, 1, 1};
-    glm_scale(u->mat_v, flip_x);
-
-    glm_mat4_mul(u->mat_p, u->mat_v, u->mat_vp);
-    glm_mat4_inv(u->mat_v, u->inv_mat_v);
-
-    /* Light parameters */
-    if (state->light) {
-        EcsDirectionalLight l = *state->light;
-        glm_vec3_copy(l.direction, u->sun_direction);
-        glm_vec3_copy(l.color, u->sun_color);
-        u->sun_intensity = l.intensity;
-    } else {
-        glm_vec3_zero(u->sun_direction);
-        glm_vec3_zero(u->sun_color);
-        u->sun_intensity = 1.0;
-    }
-    glm_vec3_copy((float*)&state->ambient_light, u->light_ambient);
-
-    // Direction vector
-    vec3 d; glm_vec3_sub(u->eye_lookat, u->eye_pos, d);
-    d[0] *= -1;
-    glm_vec3_normalize(d);
-    glm_vec3_copy(d, state->uniforms.eye_dir);
-
-    /* Shadow parameters */
-    float shadow_far = u->far_ > 128 ? 128 : u->far_;
-    u->shadow_map_size = SOKOL_SHADOW_MAP_SIZE;
-    u->shadow_near = -8;
-    u->shadow_far = shadow_far;
-
-    /* Calculate light position in screen space */
-    vec3 sun_pos;
-    sun_pos[0] = -u->sun_direction[0];
-    sun_pos[1] = -u->sun_direction[1];
-    sun_pos[2] = -u->sun_direction[2];
-    sokol_world_to_screen(sun_pos, u->sun_screen_pos, state);
-
-    /* Calculate the horizon position in screen space */
-    vec3 lookat;
-    glm_vec3_copy(u->eye_lookat, lookat);
-    lookat[1] = 0;
-    sokol_world_to_screen(lookat, u->eye_horizon, state);
-}
-
-/* Render */
-static
-void SokolRender(ecs_iter_t *it) {
-    ecs_world_t *world = it->world;
-    SokolRenderer *r = ecs_field(it, SokolRenderer, 1);
-    SokolQuery *q_buffers = ecs_field(it, SokolQuery, 2);
-    sokol_render_state_t state = {0};
-    sokol_fx_resources_t *fx = r->fx;
-
-    if (it->count > 1) {
-        ecs_err("sokol: multiple canvas instances unsupported");
-    }
-
-    const ecs_world_info_t *stats = ecs_get_world_info(world);
-
-    /* Initialize renderer state */
-    state.uniforms.dt = it->delta_time;
-    state.uniforms.t = stats->world_time_total;
-    state.width = sapp_width();
-    state.height = sapp_height();
-    state.uniforms.aspect = (float)state.width / (float)state.height;
-    state.world = world;
-    state.q_scene = q_buffers->query;
-    state.shadow_map = r->shadow_pass.color_target;
-    state.resources = &r->resources;
-
-    const EcsCanvas *canvas = ecs_get(world, r->canvas, EcsCanvas);
-
-    /* Resize resources if canvas changed */
-    if (state.width != canvas->width || state.height != canvas->height) {
-        EcsCanvas *canvas_w = ecs_get_mut(world, r->canvas, EcsCanvas);
-        canvas_w->width = state.width;
-        canvas_w->height = state.height;
-        ecs_modified(world, r->canvas, EcsCanvas);
-
-        ecs_dbg_3("sokol: update canvas size to %d, %d", state.width, state.height);
-        sokol_update_scene_pass(&r->scene_pass, state.width, state.height,
-            &r->depth_pass);
-        sokol_update_fx(r->fx, state.width, state.height);
-    }
-
-    /* Load active camera & light data from canvas */
-    if (canvas->camera) {
-        state.camera = ecs_get(world, canvas->camera, EcsCamera);
-        r->camera = canvas->camera;
-    }
-
-    /* Get atmosphere settings */
-    state.atmosphere = ecs_get(world, r->canvas, EcsAtmosphere);
-
-    /* Get ambient light */
-    state.ambient_light = canvas->ambient_light;
-
-    if (canvas->directional_light) {
-        state.light = ecs_get(world, canvas->directional_light, 
-            EcsDirectionalLight);
-    } else {
-        /* Set default ambient light if nothing is configured */
-        if (!state.ambient_light.r && !state.ambient_light.g && 
-            !state.ambient_light.b) 
-        {
-            state.ambient_light = (EcsRgb){1.0, 1.0, 1.0};
+        if (c == '\n') {
+            break;
         }
     }
 
-    /* Compute uniforms that are shared between passes */
-    sokol_init_global_uniforms(&state);
+    *ptr = '\0';
 
-    /* Compute shadow parameters and run shadow pass */
-    if (canvas->directional_light) {
-        sokol_init_light_mat_vp(&state);
-        sokol_run_shadow_pass(&r->shadow_pass, &state);
-    }
-
-    /* Depth prepass for more efficient drawing */
-    sokol_run_depth_pass(&r->depth_pass, &state);
-
-    /* Render atmosphere */
-    if (state.atmosphere) {
-        sokol_run_atmos_pass(&r->atmos_pass, &state);
-        state.atmos = r->atmos_pass.color_target;
+    if (ptr == buf) {
+        return NULL;
     } else {
-        state.atmos = r->resources.bg_texture;
+        return buf;
     }
-
-    /* Render scene */
-    sokol_run_scene_pass(&r->scene_pass, &state);
-    sg_image hdr = r->scene_pass.color_target;
-
-    /* Ssao */
-    sg_image ssao = sokol_fx_run(&fx->ssao, 2, (sg_image[]){ 
-        hdr, r->depth_pass.color_target }, 
-            &state, 0);
-
-    /* Fog */
-    const EcsRgb *bg_color = &canvas->background_color;
-    sokol_fog_set_params(&fx->fog, canvas->fog_density, 
-        bg_color->r, bg_color->g, bg_color->b, state.uniforms.eye_horizon[1]);
-    sg_image scene_with_fog = sokol_fx_run(&fx->fog, 3, (sg_image[]){ 
-        ssao, r->depth_pass.color_target, state.atmos },
-            &state, 0);
-
-    /* HDR */
-    sokol_fx_run(&fx->hdr, 1, (sg_image[]){ scene_with_fog },
-        &state, &r->screen_pass);
 }
 
 static
-void SokolCommit(ecs_iter_t *it) {
-    sg_commit();
-}
-
-/* Initialize renderer & resources */
-static
-void SokolInitRenderer(ecs_iter_t *it) {
-    ecs_world_t *world = it->world;
-    EcsCanvas *canvas = ecs_field(it, EcsCanvas, 1);
-
-    if (it->count > 1) {
-        ecs_err("sokol: multiple canvas instances unsupported");
-    }
-
-    ecs_trace("#[bold]sokol: initializing renderer");
-    ecs_log_push();
-
-    int w = sapp_width();
-    int h = sapp_height();
-
-    sg_setup(&(sg_desc) {
-        .context.depth_format = SG_PIXELFORMAT_NONE,
-        .buffer_pool_size = 16384,
-        .logger = { slog_func }
-    });
-
-    assert(sg_isvalid());
-    ecs_trace("sokol: library initialized");
-
-    sokol_resources_t resources = sokol_init_resources();
-    resources.bg_texture = sokol_bg_texture(canvas->background_color, 2, 2);
-
-    sokol_offscreen_pass_t depth_pass;
-    sokol_offscreen_pass_t scene_pass = sokol_init_scene_pass(
-        canvas->background_color, w, h, 1, &depth_pass);
-    sokol_offscreen_pass_t atmos_pass = sokol_init_atmos_pass();
-
-    ecs_set(world, SokolRendererInst, SokolRenderer, {
-        .canvas = it->entities[0],
-        .resources = resources,
-        .depth_pass = depth_pass,
-        .shadow_pass = sokol_init_shadow_pass(SOKOL_SHADOW_MAP_SIZE),
-        .scene_pass = scene_pass,
-        .atmos_pass = atmos_pass,
-        .screen_pass = sokol_init_screen_pass(),
-        .fx = sokol_init_fx(w, h)
-    });
-
-    ecs_trace("sokol: canvas initialized");
-
-    ecs_set(world, SokolRendererInst, SokolMaterials, { true });
-
-    ecs_set_pair(world, SokolRendererInst, SokolQuery, ecs_id(SokolGeometry), {
-        ecs_query_new(world, "[in] flecs.systems.sokol.Geometry")
-    });
-
-    sokol_init_geometry(world, &resources);
-    ecs_trace("sokol: static geometry resources initialized");
-
-    ecs_log_pop();
-}
-
-/* Cleanup renderer */
-static
-void SokolFiniRenderer(ecs_iter_t *it) {
-    ecs_trace("sokol: shutting down");
-    sg_shutdown();
-}
-
-void FlecsSystemsSokolRendererImport(
-    ecs_world_t *world)
+int sokol_shader_parse(
+    const char *filename,
+    const char *str,
+    ecs_strbuf_t *out)
 {
-    ECS_MODULE(world, FlecsSystemsSokolRenderer);
-    ECS_IMPORT(world, FlecsSystemsSokolMaterials);
-    ECS_IMPORT(world, FlecsSystemsSokolGeometry);
+    FILE *f = NULL;
+    if (filename) {
+        f = fopen(filename, "r");
+        if (!f) {
+            ecs_err("%s: file not found\n", filename);
+            return -1;
+        }
+    }
 
-    /* Create components in parent scope */
-    ecs_entity_t parent = ecs_lookup_fullpath(world, "flecs.systems.sokol");
-    ecs_entity_t module = ecs_set_scope(world, parent);
-    ecs_set_name_prefix(world, "Sokol");
+    char line[1024];
+    do {
+        if (f) {
+            if (sokol_file_readln(f, line, 1024) == NULL) {
+                break;
+            }
+        } else {
+            str = sokol_str_readln(str, line, 1024);
+            if (!str) {
+                break;
+            }
+        }
 
-    ECS_COMPONENT_DEFINE(world, SokolRenderer);
+        if (!ecs_os_strncmp(line, "#include \"", 10)) {
+            char *last = strrchr(line, '"');
+            char *file = &line[10];
+            last[0] = '\0';
 
-    /* Register systems in module scope */
-    ecs_set_scope(world, module);
+            if (sokol_shader_parse(file, NULL, out)) {
+                return -1;
+            }
+        } else {
+            ecs_strbuf_appendstr(out, line);
+        }
+    } while(true);
 
-    /* System that initializes renderer */
-    ECS_SYSTEM(world, SokolInitRenderer, EcsOnLoad,
-        flecs.components.gui.Canvas, 
-        [out] !flecs.systems.sokol.Renderer($));
+    return 0;
+}
 
-    /* Configure no_readonly for SokolInitRenderer as it needs direct access to
-     * the world for creating queries */
-    ecs_system(world, {
-        .entity = SokolInitRenderer,
-        .no_readonly = true
-    });
+char* sokol_shader_from_file(
+    const char *filename)
+{
+    ecs_strbuf_t out = ECS_STRBUF_INIT;
+    if (sokol_shader_parse(filename, NULL, &out)) {
+        ecs_strbuf_reset(&out);
+        return NULL;
+    } else {
+        return ecs_strbuf_get(&out);
+    }
+}
 
-    /* System that cleans up renderer */
-    ECS_OBSERVER(world, SokolFiniRenderer, EcsUnSet, 
-        flecs.systems.sokol.Renderer);
-
-    /* System that orchestrates the render tasks */
-    ECS_SYSTEM(world, SokolRender, EcsOnStore, 
-        flecs.systems.sokol.Renderer,
-        (sokol.Query, Geometry));
-
-    /* System that calls sg_commit */
-    ECS_SYSTEM(world, SokolCommit, EcsOnStore, 0);
+char* sokol_shader_from_str(
+    const char *str)
+{
+    ecs_strbuf_t out = ECS_STRBUF_INIT;
+    if (sokol_shader_parse(NULL, str, &out)) {
+        ecs_strbuf_reset(&out);
+        return NULL;
+    } else {
+        return ecs_strbuf_get(&out);
+    }
 }
 
 
-ECS_COMPONENT_DECLARE(SokolMaterialId);
-ECS_COMPONENT_DECLARE(SokolMaterials);
 
-void SokolInitMaterials(ecs_iter_t *it) {
-    const SokolQuery *q = ecs_field(it, SokolQuery, 1);
-    SokolMaterials *materials = ecs_field(it, SokolMaterials, 2);
+typedef struct shadow_vs_uniforms_t {
+    mat4 mat_vp;
+} shadow_vs_uniforms_t;
 
-    materials->changed = true;
-    materials->array[0].specular_power = 0.0;
-    materials->array[0].shininess = 1.0;
-    materials->array[0].emissive = 0.0;
+static const char *shd_v = 
+    SOKOL_SHADER_HEADER
+    "uniform mat4 u_mat_vp;\n"
+    "layout(location=0) in vec3 v_position;\n"
+    "layout(location=1) in mat4 i_mat_m;\n"
+    "out vec2 proj_zw;\n"
+    "void main() {\n"
+    "  gl_Position = u_mat_vp * i_mat_m * vec4(v_position, 1.0);\n"
+    "  proj_zw = gl_Position.zw;\n"
+    "}\n";
 
-    if (!ecs_query_changed(q->query, 0)) {
-        materials->changed = false;
+static const char *shd_f =
+    SOKOL_SHADER_HEADER
+    "in vec2 proj_zw;\n"
+    "out vec4 frag_color;\n"
+
+    "vec4 encodeDepth(float v) {\n"
+    "    vec4 enc = vec4(1.0, 255.0, 65025.0, 160581375.0) * v;\n"
+    "    enc = fract(enc);\n"
+    "    enc -= enc.yzww * vec4(1.0/255.0,1.0/255.0,1.0/255.0,0.0);\n"
+    "    return enc;\n"
+    "}\n"
+
+    "void main() {\n"
+    "  float depth = proj_zw.x / proj_zw.y;\n"
+    "  frag_color = encodeDepth(depth);\n"
+    "}\n";
+
+sokol_offscreen_pass_t sokol_init_shadow_pass(
+    int size)
+{
+    ecs_trace("sokol: initialize shadow pipeline");
+
+    sokol_offscreen_pass_t result = {0};
+
+    result.pass_action  = (sg_pass_action) {
+        .colors[0] = { 
+            .action = SG_ACTION_CLEAR, 
+            .value = { 1.0f, 1.0f, 1.0f, 1.0f}
+        }
+    };
+
+    result.depth_target = sokol_target_depth(size, size, 1);
+    result.color_target = sokol_target_rgba8("Shadow map", size, size, 1);
+
+    result.pass = sg_make_pass(&(sg_pass_desc){
+        .color_attachments[0].image = result.color_target,
+        .depth_stencil_attachment.image = result.depth_target,
+        .label = "shadow-map-pass"
+    });
+
+    sg_shader shd = sg_make_shader(&(sg_shader_desc){
+        .vs.uniform_blocks = {
+            [0] = {
+                .size = sizeof(shadow_vs_uniforms_t),
+                .uniforms = {
+                    [0] = { .name="u_mat_vp", .type=SG_UNIFORMTYPE_MAT4 },
+                },
+            }
+        },
+        .vs.source = shd_v,
+        .fs.source = shd_f
+    });
+
+    /* Create pipeline that mimics the normal pipeline, but without the material
+     * normals and color, and with front culling instead of back culling */
+    result.pip = sg_make_pipeline(&(sg_pipeline_desc){
+        .shader = shd,
+        .index_type = SG_INDEXTYPE_UINT16,
+        .layout = {
+            .buffers = {
+                [1] = { .stride = 64, .step_func=SG_VERTEXSTEP_PER_INSTANCE }
+            },
+
+            .attrs = {
+                /* Static geometry */
+                [0] = { .buffer_index=0, .offset=0,  .format=SG_VERTEXFORMAT_FLOAT3 },
+
+                /* Matrix (per instance) */
+                [1] = { .buffer_index=1, .offset=0,  .format=SG_VERTEXFORMAT_FLOAT4 },
+                [2] = { .buffer_index=1, .offset=16, .format=SG_VERTEXFORMAT_FLOAT4 },
+                [3] = { .buffer_index=1, .offset=32, .format=SG_VERTEXFORMAT_FLOAT4 },
+                [4] = { .buffer_index=1, .offset=48, .format=SG_VERTEXFORMAT_FLOAT4 }
+            }
+        },
+        .depth = {
+            .pixel_format = SG_PIXELFORMAT_DEPTH,
+            .compare = SG_COMPAREFUNC_LESS_EQUAL,
+            .write_enabled = true
+        },
+        .colors = {{
+            .pixel_format = SG_PIXELFORMAT_RGBA8
+        }},
+        .cull_mode = SG_CULLMODE_FRONT
+    });
+
+    return result;
+}
+
+static
+void shadow_draw_instances(
+    SokolGeometry *geometry,
+    sokol_geometry_buffers_t *buffers)
+{
+    if (!buffers->instance_count) {
         return;
     }
 
-    ecs_iter_t qit = ecs_query_iter(it->world, q->query);
-    while (ecs_query_next(&qit)) {
-        SokolMaterialId *mat = ecs_field(&qit, SokolMaterialId, 1);
-        EcsSpecular *spec = ecs_field(&qit, EcsSpecular, 2);
-        EcsEmissive *em = ecs_field(&qit, EcsEmissive, 3);
+    sg_bindings bind = {
+        .vertex_buffers = {
+            [0] = geometry->vertices,
+            [1] = buffers->transforms
+        },
+        .index_buffer = geometry->indices
+    };
 
-        int i;
-        if (spec) {
-            for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].value;
-                materials->array[id].specular_power = spec[i].specular_power;
-                materials->array[id].shininess = spec[i].shininess;
-            }
-        } else {
-            for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].value;
-                materials->array[id].specular_power = 0;
-                materials->array[id].shininess = 1.0;
-            }            
-        }
-
-        if (em) {
-            for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].value;
-                materials->array[id].emissive = em[i].value;
-            }
-        } else {
-            for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].value;
-                materials->array[id].emissive = 0;
-            }
-        }
-    }    
+    sg_apply_bindings(&bind);
+    sg_draw(0, geometry->index_count, buffers->instance_count);
 }
 
-static
-void SokolRegisterMaterial(ecs_iter_t *it) {
-    static uint16_t next_material = 1; /* 0 is the default material */
-
-    int i;
-    for (i = 0; i < it->count; i ++) {
-        ecs_set(it->world, it->entities[i], SokolMaterialId, {
-            next_material ++ /* Assign material id */
-        });
-    }
-
-    ecs_assert(next_material < SOKOL_MAX_MATERIALS, 
-        ECS_INVALID_PARAMETER, NULL);
-}
-
-void FlecsSystemsSokolMaterialsImport(
-    ecs_world_t *world)
+void sokol_run_shadow_pass(
+    sokol_offscreen_pass_t *pass,
+    sokol_render_state_t *state) 
 {
-    ECS_MODULE(world, FlecsSystemsSokolMaterials);
+    /* Render to offscreen texture so screen-space effects can be applied */
+    sg_begin_pass(pass->pass, &pass->pass_action);
+    sg_apply_pipeline(pass->pip);
 
-    /* Store components in parent sokol scope */
-    ecs_entity_t parent = ecs_lookup_fullpath(world, "flecs.systems.sokol");
-    ecs_entity_t module = ecs_set_scope(world, parent);
-    ecs_set_name_prefix(world, "Sokol");
-
-    ECS_COMPONENT_DEFINE(world, SokolMaterialId);
-    ECS_COMPONENT_DEFINE(world, SokolMaterials);
-
-    /* Register systems in module scope */
-    ecs_set_scope(world, module);
-
-    /* Query that finds all entities with material properties */
-    const char *material_query = 
-        "[in] flecs.systems.sokol.MaterialId(self),"
-        "[in] ?flecs.components.graphics.Specular(self),"
-        "[in] ?flecs.components.graphics.Emissive(self),"
-        "     ?Prefab";
-
-    /* System that initializes material array that's sent to vertex shader */
-    ECS_SYSTEM(world, SokolInitMaterials, EcsOnLoad,
-        [in]   sokol.Query(InitMaterials, SokolMaterials),
-        [out]  SokolMaterials);
-
-    /* Set material query for InitMaterials system */
-    ecs_set_pair(world, SokolInitMaterials, SokolQuery, ecs_id(SokolMaterials),{
-        ecs_query_new(world, material_query)
+    shadow_vs_uniforms_t vs_u;
+    glm_mat4_copy(state->uniforms.light_mat_vp, vs_u.mat_vp);
+    sg_apply_uniforms(SG_SHADERSTAGE_VS, 0, &(sg_range){ 
+        &vs_u, sizeof(shadow_vs_uniforms_t) 
     });
 
-    /* Assigns material id to entities with material properties */
-    ECS_SYSTEM(world, SokolRegisterMaterial, EcsPostLoad,
-        [out] !flecs.systems.sokol.MaterialId,
-        [in]   flecs.components.graphics.Specular(self) || 
-               flecs.components.graphics.Emissive(self),
-               ?Prefab);
+    /* Loop buffers, render scene */
+    ecs_iter_t qit = ecs_query_iter(state->world, state->q_scene);
+    while (ecs_query_next(&qit)) {
+        SokolGeometry *geometry = ecs_field(&qit, SokolGeometry, 1);
+        
+        int b;
+        for (b = 0; b < qit.count; b ++) {
+            /* Only draw solids, ignore emissive and transparent (for now) */
+            shadow_draw_instances(&geometry[b], geometry[b].solid);
+        }
+    }
+
+    sg_end_pass();
+}
+
+
+static
+const char *shd_fog_header = 
+    "#include \"etc/sokol/shaders/fx_fog_header.glsl\"\n";
+
+static
+const char *shd_fog =
+    "#include \"etc/sokol/shaders/fx_fog_main.glsl\"\n";
+
+#define FOG_INPUT_HDR SOKOL_FX_INPUT(0)
+#define FOG_INPUT_DEPTH SOKOL_FX_INPUT(1)
+#define FOG_INPUT_ATMOS SOKOL_FX_INPUT(2)
+
+SokolFx sokol_init_fog(
+    int width, int height)
+{
+    ecs_trace("sokol: initialize fog effect");
+    ecs_log_push();
+
+    SokolFx fx = {0};
+    fx.name = "Fog";
+    fx.width = width;
+    fx.height = height;
+
+    sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
+        .name = "fog",
+        .outputs = {{ .global_size = true }},
+        .shader_header = shd_fog_header,
+        .shader = shd_fog,
+        .color_format = SG_PIXELFORMAT_RGBA16F,
+        .mipmap_count = 2,
+        .inputs = { "hdr", "depth", "atmos" },
+        .params = { "u_density", "u_r", "u_g", "u_b", "u_horizon" },
+        .steps = {
+            [0] = {
+                .inputs = { {FOG_INPUT_HDR}, {FOG_INPUT_DEPTH}, {FOG_INPUT_ATMOS} },
+                .params = { 1.2, 0.0, 0.0, 0.0 }
+            }
+        }
+    });
+
+    ecs_log_pop();
+
+    return fx;
+}
+
+void sokol_fog_set_params(
+    SokolFx *fx,
+    float density,
+    float r,
+    float g,
+    float b,
+    float uv_horizon)
+{
+    float *params = fx->pass[0].steps[0].params;
+    params[0] = density;
+    params[1] = r;
+    params[2] = g;
+    params[3] = b;
+    params[4] = uv_horizon;
+}
+
+
+sokol_fx_resources_t* sokol_init_fx(
+    int w, int h)
+{
+    sokol_fx_resources_t *result = ecs_os_calloc_t(sokol_fx_resources_t);
+    result->hdr = sokol_init_hdr(w, h);
+    result->fog = sokol_init_fog(w, h);
+    result->ssao = sokol_init_ssao(w, h);
+    return result;
+}
+
+void sokol_update_fx(
+    sokol_fx_resources_t *fx, 
+    int width, 
+    int height)
+{
+    sokol_fx_update_size(&fx->hdr, width, height);
+    sokol_fx_update_size(&fx->fog, width, height);
+    sokol_fx_update_size(&fx->ssao, width, height);
+}
+
+
+// ITU BT.709: vec3(0.2126, 0.7152, 0.0722)
+// ITU BT.601: vec3(0.299, 0.587, 0.114)
+
+static
+const char *shd_threshold =
+    "#include \"etc/sokol/shaders/fx_hdr_threshold.glsl\"\n";
+
+const char *shd_blur_hdr =
+    "const float gauss[5] = float[] (0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);\n";
+
+const char *shd_blur =
+    "#include \"etc/sokol/shaders/fx_hdr_blur.glsl\"\n";
+
+static
+const char *shd_hdr =
+    "#include \"etc/sokol/shaders/fx_hdr.glsl\"\n";
+
+#define FX_INPUT_HDR (0)
+#define FX_INPUT_LUM (1)
+
+SokolFx sokol_init_hdr(
+    int width, int height)
+{
+    ecs_trace("sokol: initialize hdr effect");
+    ecs_log_push();
+
+    SokolFx fx = {0};
+    fx.name = "Hdr";
+    fx.width = width;
+    fx.height = height;
+
+    int threshold = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
+        .name = "threshold",
+        .outputs = {{512}},
+        .shader = shd_threshold,
+        .color_format = SG_PIXELFORMAT_RGBA16F,
+        .inputs = { "hdr" },
+        .params = { "threshold", "mipmap" },
+        .steps = {
+            [0] = {
+                .name = "glow",
+                .params = { 0.1, 1.0 },
+                .inputs = { {FX_INPUT_HDR} }
+            }
+        }
+    });
+
+    int blur = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
+        .name = "blur",
+        .outputs = {{512}},
+        .shader_header = shd_blur_hdr,
+        .shader = shd_blur,
+        .color_format = SG_PIXELFORMAT_RGBA16F,
+        .inputs = { "tex" },
+        .params = { "horizontal" },
+        .steps = {
+            /* glow */
+            [0] = { 
+                .name = "halo hblur",
+                .inputs = { {SOKOL_FX_PASS(threshold), 0} },
+                .params = { 1.0 },
+                .loop_count = 4
+            },
+            [1] = { 
+                .name = "halo vblur",
+                .inputs = { { -1 } },
+                .params = { 0.0 }
+            }
+        }
+    });
+
+    sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
+        .name = "hdr",
+        .outputs = {{ .global_size = true }},
+        .shader = shd_hdr,
+        .inputs = { "hdr", "bloom" },
+        .params = { "exposure", "gamma" },
+        .steps = {
+            [0] = {
+                .inputs = { {SOKOL_FX_INPUT(0)}, {SOKOL_FX_PASS(blur), 0} },
+                .params = { 1.0, 2.2 }
+            }
+        }
+    });
+
+    ecs_log_pop();
+
+    return fx;
+}
+
+
+static
+const char *shd_ssao_header = 
+    "#include \"etc/sokol/shaders/fx_ssao_header.glsl\"\n";
+
+static
+const char *shd_ssao =
+    "#include \"etc/sokol/shaders/fx_ssao_main.glsl\"\n";
+
+static
+const char *shd_blend_mult_header = 
+    "#include \"etc/sokol/shaders/common.glsl\"\n";
+
+static
+const char *shd_blend_mult =
+    "#include \"etc/sokol/shaders/fx_ssao_blend.glsl\"\n";
+
+#define SSAO_INPUT_SCENE SOKOL_FX_INPUT(0)
+#define SSAO_INPUT_DEPTH SOKOL_FX_INPUT(1)
+
+SokolFx sokol_init_ssao(
+    int width, int height)
+{
+    ecs_trace("sokol: initialize ambient occlusion effect");
+    ecs_log_push();
+
+    SokolFx fx = {0};
+    fx.name = "AmbientOcclusion";
+    fx.width = width;
+    fx.height = height;
+
+#ifdef __EMSCRIPTEN__
+    float factor = 2;
+#else
+    float factor = 0.5;
+#endif
+
+    // Ambient occlusion shader 
+    int32_t ao = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
+        .name = "ssao",
+        .outputs = {{ .global_size = true, .factor = factor }},
+        .shader_header = shd_ssao_header,
+        .shader = shd_ssao,
+        .color_format = SG_PIXELFORMAT_RGBA16F,
+        .inputs = { "t_depth" },
+        .steps = {
+            [0] = {
+                .inputs = { {SSAO_INPUT_DEPTH} }
+            }
+        }
+    });
+
+    // Blur to reduce the noise, so we can keep sample count low
+    int blur = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
+        .name = "blur",
+        .outputs = {{512}},
+        .shader_header = shd_blur_hdr,
+        .shader = shd_blur,
+        .color_format = SG_PIXELFORMAT_RGBA16F,
+        .inputs = { "tex" },
+        .params = { "horizontal" },
+        .steps = {
+            [0] = { 
+                .name = "ssao hblur",
+                .inputs = { {SOKOL_FX_PASS(ao)} },
+                .params = { 1.0 },
+                .loop_count = 4
+            },
+            [1] = { 
+                .name = "ssao vblur",
+                .inputs = { { -1 } },
+                .params = { 0.0 }
+            }
+        }
+    });
+
+    // Multiply ambient occlusion with the scene
+    sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
+        .name = "blend",
+        .outputs = {{ .global_size = true }},
+        .shader_header = shd_blend_mult_header,
+        .shader = shd_blend_mult,
+        .color_format = SG_PIXELFORMAT_RGBA16F,
+        .inputs = { "t_scene", "t_occlusion" },
+        .steps = {
+            [0] = {
+                .inputs = { {SSAO_INPUT_SCENE}, {SOKOL_FX_PASS(blur)} }
+            }
+        }
+    });
+
+    ecs_log_pop();
+
+    return fx;
 }
 
 
@@ -33191,7 +32857,10 @@ void sokol_update_group(
             // Apply geometry-specific scaling to transform matrix
             geometry->populate(&page->transforms[pstart], geometry_data, 
                 to_copy, geometry_self);
-            geometry_data = ECS_OFFSET(geometry_data, geometry_size * to_copy);
+
+            if (geometry_self) {
+                geometry_data = ECS_OFFSET(geometry_data, geometry_size * to_copy);
+            }
 
             remaining -= to_copy;
             page->count += to_copy;
@@ -33639,293 +33308,635 @@ void FlecsSystemsSokolGeometryImport(
 }
 
 
-typedef struct atmos_fs_uniforms_t {
-    mat4 inv_mat_vp;
-    vec3 eye_pos;
-    vec3 light_pos;
-    vec3 night_color;
-    float aspect;
-    float offset;
-} atmos_fs_uniforms_t;
+ECS_COMPONENT_DECLARE(SokolMaterialId);
+ECS_COMPONENT_DECLARE(SokolMaterials);
 
-typedef struct atmos_param_fs_uniforms_t {
-    float intensity;
-    float planet_radius;
-    float atmosphere_radius;
-    float mie_coef;
-    float rayleigh_scale_height;
-    float mie_scale_height;
-    float mie_scatter_dir;
-    vec3 rayleigh_coef;
-} atmos_param_fs_uniforms_t;
+void SokolInitMaterials(ecs_iter_t *it) {
+    const SokolQuery *q = ecs_field(it, SokolQuery, 1);
+    SokolMaterials *materials = ecs_field(it, SokolMaterials, 2);
 
-static const char *atmosphere_f =
-    SOKOL_SHADER_HEADER
-    "#include \"etc/sokol/shaders/atmosphere_frag.glsl\"\n";
+    materials->changed = true;
+    materials->array[0].specular_power = 0.0;
+    materials->array[0].shininess = 1.0;
+    materials->array[0].emissive = 0.0;
 
-static
-void update_atmosphere_pass(sokol_offscreen_pass_t *pass)
-{
-    pass->pass_action = sokol_clear_action((ecs_rgb_t){1, 1, 1}, false, false),
-    pass->color_target = sokol_target_rgba16f(
-        "Atmos color target", 256, 256, 1, 1);
-    pass->pass = sg_make_pass(&(sg_pass_desc){
-        .color_attachments[0].image = pass->color_target,
-        .label = "atmosphere-pass"
-    });
-}
-
-sokol_offscreen_pass_t sokol_init_atmos_pass(void)
-{
-    sokol_offscreen_pass_t result = {0};
-    update_atmosphere_pass(&result);
-
-    char *fs = sokol_shader_from_str(atmosphere_f);
-    sg_shader shd = sg_make_shader(&(sg_shader_desc){
-        .vs.source = sokol_vs_passthrough(),
-        .fs = {
-            .source = fs,
-            .uniform_blocks = {
-                [0] = {
-                    .size = sizeof(atmos_fs_uniforms_t),
-                    .uniforms = {
-                        [0] = { .name="u_mat_v", .type=SG_UNIFORMTYPE_MAT4 },
-                        [1] = { .name="u_eye_pos", .type=SG_UNIFORMTYPE_FLOAT3 },
-                        [2] = { .name="u_light_pos", .type=SG_UNIFORMTYPE_FLOAT3 },
-                        [3] = { .name="u_night_color", .type=SG_UNIFORMTYPE_FLOAT3 },
-                        [4] = { .name="u_aspect", .type=SG_UNIFORMTYPE_FLOAT },
-                        [5] = { .name="u_offset", .type=SG_UNIFORMTYPE_FLOAT },
-                        [6] = { .name="padding", .type=SG_UNIFORMTYPE_FLOAT },
-                    }
-                },
-                [1] = {
-                    .size = sizeof(atmos_param_fs_uniforms_t),
-                    .uniforms = {
-                        [0] = { .name="intensity", .type=SG_UNIFORMTYPE_FLOAT },
-                        [1] = { .name="planet_radius", .type=SG_UNIFORMTYPE_FLOAT },
-                        [2] = { .name="atmosphere_radius", .type=SG_UNIFORMTYPE_FLOAT },
-                        [3] = { .name="mie_coef", .type=SG_UNIFORMTYPE_FLOAT },
-                        [4] = { .name="rayleigh_scale_height", .type=SG_UNIFORMTYPE_FLOAT },
-                        [5] = { .name="mie_scale_height", .type=SG_UNIFORMTYPE_FLOAT },
-                        [6] = { .name="mie_scatter_dir", .type=SG_UNIFORMTYPE_FLOAT },
-                        [7] = { .name="rayleigh_coef", .type=SG_UNIFORMTYPE_FLOAT3 },
-                    }
-                }
-            }
-        }
-    });
-    ecs_os_free(fs);
-
-    /* Create pipeline that mimics the normal pipeline, but without the material
-     * normals and color, and with front culling instead of back culling */
-    result.pip = sg_make_pipeline(&(sg_pipeline_desc){
-        .shader = shd,
-        .layout = {
-            .attrs = {
-                /* Static geometry */
-                [0] = { .buffer_index=0, .format=SG_VERTEXFORMAT_FLOAT3 },
-                [1] = { .buffer_index=0, .format=SG_VERTEXFORMAT_FLOAT2 }
-            }
-        },
-        .colors = {{
-            .pixel_format = SG_PIXELFORMAT_RGBA16F
-        }},
-        .cull_mode = SG_CULLMODE_FRONT,
-        .sample_count = 1
-    });
-
-    return result;
-}
-
-void sokol_run_atmos_pass(
-    sokol_offscreen_pass_t *pass,
-    sokol_render_state_t *state) 
-{
-    if (!state->atmosphere) {
-        ecs_err("atmosphere pass called without atmosphere parameters");
+    if (!ecs_query_changed(q->query, 0)) {
+        materials->changed = false;
         return;
     }
 
-    atmos_fs_uniforms_t fs_u;
-    glm_mat4_copy(state->uniforms.inv_mat_v, fs_u.inv_mat_vp);
-    glm_vec3_copy(state->uniforms.eye_pos, fs_u.eye_pos);
-    glm_vec3_copy(state->uniforms.sun_direction, fs_u.light_pos);
-    fs_u.night_color[0] = 0.001 / 8.0;
-    fs_u.night_color[1] = 0.008 / 8.0;
-    fs_u.night_color[2] = 0.016 / 8.0;
-    fs_u.aspect = state->uniforms.aspect;
-    fs_u.offset = 0.05;
+    ecs_iter_t qit = ecs_query_iter(it->world, q->query);
+    while (ecs_query_next(&qit)) {
+        SokolMaterialId *mat = ecs_field(&qit, SokolMaterialId, 1);
+        EcsSpecular *spec = ecs_field(&qit, EcsSpecular, 2);
+        EcsEmissive *em = ecs_field(&qit, EcsEmissive, 3);
 
-    atmos_param_fs_uniforms_t fs_p_u;
-    fs_p_u.intensity = state->atmosphere->intensity;
-    fs_p_u.planet_radius = state->atmosphere->planet_radius;
-    fs_p_u.atmosphere_radius = state->atmosphere->atmosphere_radius;
-    fs_p_u.mie_coef = state->atmosphere->mie_coef;
-    fs_p_u.rayleigh_scale_height = state->atmosphere->rayleigh_scale_height;
-    fs_p_u.mie_scale_height = state->atmosphere->mie_scale_height;
-    fs_p_u.mie_scatter_dir = state->atmosphere->mie_scatter_dir;
-    glm_vec3_copy((float*)state->atmosphere->rayleigh_coef, fs_p_u.rayleigh_coef);
-
-    sg_begin_pass(pass->pass, &pass->pass_action);
-    sg_apply_pipeline(pass->pip);
-    sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, &(sg_range){&fs_u, sizeof(atmos_fs_uniforms_t)});
-    sg_apply_uniforms(SG_SHADERSTAGE_FS, 1, &(sg_range){&fs_p_u, sizeof(atmos_param_fs_uniforms_t)});
-
-    sg_bindings bind = { .vertex_buffers = { state->resources->quad } };
-    sg_apply_bindings(&bind);
-    sg_draw(0, 6, 1);
-    sg_end_pass();
-
-    sg_end_pass();
-}
-
-#include <stdio.h>
-
-static
-const char* sokol_str_readln(
-    const char *str,
-    char* buf,
-    unsigned int length)
-{
-    int c;
-    char* ptr;
-
-    if (!str) {
-        return 0;
-    }
-
-    ptr = buf;
-
-    while ((c = *str)) {
-        if ((unsigned int)(ptr - buf) < (length - 1)) {
-            *ptr = c;
-            ptr++;
-        }
-
-        if (c == '\n') {
-            break;
-        }
-
-        str ++;
-    }
-
-    *ptr = '\0';
-
-    if (ptr == buf) {
-        return NULL;
-    } else {
-        return str + 1;
-    }
-}
-
-static
-char* sokol_file_readln(
-    FILE* file,
-    char* buf,
-    unsigned int length)
-{
-    int c;
-    char* ptr;
-
-    if (!file) {
-        return 0;
-    }
-
-    c = EOF;
-    ptr = buf;
-
-    while (!feof(file)) {
-        c = fgetc(file);
-        
-        if (c == EOF) {
-            break;
-        }
-
-        if ((unsigned int)(ptr - buf) < (length - 1)) {
-            *ptr = c;
-            ptr++;
-        }
-
-        if (c == '\n') {
-            break;
-        }
-    }
-
-    *ptr = '\0';
-
-    if (ptr == buf) {
-        return NULL;
-    } else {
-        return buf;
-    }
-}
-
-static
-int sokol_shader_parse(
-    const char *filename,
-    const char *str,
-    ecs_strbuf_t *out)
-{
-    FILE *f = NULL;
-    if (filename) {
-        f = fopen(filename, "r");
-        if (!f) {
-            ecs_err("%s: file not found\n", filename);
-            return -1;
-        }
-    }
-
-    char line[1024];
-    do {
-        if (f) {
-            if (sokol_file_readln(f, line, 1024) == NULL) {
-                break;
+        int i;
+        if (spec) {
+            for (i = 0; i < qit.count; i ++) {
+                uint16_t id = mat[i].value;
+                materials->array[id].specular_power = spec[i].specular_power;
+                materials->array[id].shininess = spec[i].shininess;
             }
         } else {
-            str = sokol_str_readln(str, line, 1024);
-            if (!str) {
-                break;
-            }
+            for (i = 0; i < qit.count; i ++) {
+                uint16_t id = mat[i].value;
+                materials->array[id].specular_power = 0;
+                materials->array[id].shininess = 1.0;
+            }            
         }
 
-        if (!ecs_os_strncmp(line, "#include \"", 10)) {
-            char *last = strrchr(line, '"');
-            char *file = &line[10];
-            last[0] = '\0';
-
-            if (sokol_shader_parse(file, NULL, out)) {
-                return -1;
+        if (em) {
+            for (i = 0; i < qit.count; i ++) {
+                uint16_t id = mat[i].value;
+                materials->array[id].emissive = em[i].value;
             }
         } else {
-            ecs_strbuf_appendstr(out, line);
+            for (i = 0; i < qit.count; i ++) {
+                uint16_t id = mat[i].value;
+                materials->array[id].emissive = 0;
+            }
         }
-    } while(true);
-
-    return 0;
+    }    
 }
 
-char* sokol_shader_from_file(
-    const char *filename)
-{
-    ecs_strbuf_t out = ECS_STRBUF_INIT;
-    if (sokol_shader_parse(filename, NULL, &out)) {
-        ecs_strbuf_reset(&out);
-        return NULL;
-    } else {
-        return ecs_strbuf_get(&out);
+static
+void SokolRegisterMaterial(ecs_iter_t *it) {
+    static uint16_t next_material = 1; /* 0 is the default material */
+
+    int i;
+    for (i = 0; i < it->count; i ++) {
+        ecs_set(it->world, it->entities[i], SokolMaterialId, {
+            next_material ++ /* Assign material id */
+        });
     }
+
+    ecs_assert(next_material < SOKOL_MAX_MATERIALS, 
+        ECS_INVALID_PARAMETER, NULL);
 }
 
-char* sokol_shader_from_str(
-    const char *str)
+void FlecsSystemsSokolMaterialsImport(
+    ecs_world_t *world)
 {
-    ecs_strbuf_t out = ECS_STRBUF_INIT;
-    if (sokol_shader_parse(NULL, str, &out)) {
-        ecs_strbuf_reset(&out);
-        return NULL;
-    } else {
-        return ecs_strbuf_get(&out);
-    }
+    ECS_MODULE(world, FlecsSystemsSokolMaterials);
+
+    /* Store components in parent sokol scope */
+    ecs_entity_t parent = ecs_lookup_fullpath(world, "flecs.systems.sokol");
+    ecs_entity_t module = ecs_set_scope(world, parent);
+    ecs_set_name_prefix(world, "Sokol");
+
+    ECS_COMPONENT_DEFINE(world, SokolMaterialId);
+    ECS_COMPONENT_DEFINE(world, SokolMaterials);
+
+    /* Register systems in module scope */
+    ecs_set_scope(world, module);
+
+    /* Query that finds all entities with material properties */
+    const char *material_query = 
+        "[in] flecs.systems.sokol.MaterialId(self),"
+        "[in] ?flecs.components.graphics.Specular(self),"
+        "[in] ?flecs.components.graphics.Emissive(self),"
+        "     ?Prefab";
+
+    /* System that initializes material array that's sent to vertex shader */
+    ECS_SYSTEM(world, SokolInitMaterials, EcsOnLoad,
+        [in]   sokol.Query(InitMaterials, SokolMaterials),
+        [out]  SokolMaterials);
+
+    /* Set material query for InitMaterials system */
+    ecs_set_pair(world, SokolInitMaterials, SokolQuery, ecs_id(SokolMaterials),{
+        ecs_query_new(world, material_query)
+    });
+
+    /* Assigns material id to entities with material properties */
+    ECS_SYSTEM(world, SokolRegisterMaterial, EcsPostLoad,
+        [out] !flecs.systems.sokol.MaterialId,
+        [in]   flecs.components.graphics.Specular(self) || 
+               flecs.components.graphics.Emissive(self),
+               ?Prefab);
 }
 
+#include "math.h"
+
+ECS_COMPONENT_DECLARE(SokolRenderer);
+
+/* Static geometry/texture resources */
+static
+sokol_resources_t sokol_init_resources(void) {
+    return (sokol_resources_t){
+        .quad = sokol_buffer_quad(),
+
+        .rect = sokol_buffer_rectangle(),
+        .rect_indices = sokol_buffer_rectangle_indices(),
+        .rect_normals = sokol_buffer_rectangle_normals(),
+
+        .box = sokol_buffer_box(),
+        .box_indices = sokol_buffer_box_indices(),
+        .box_normals = sokol_buffer_box_normals(),
+
+        .noise_texture = sokol_noise_texture(16, 16)
+    };
+}
+
+static
+void vec4_print(vec4 v) {
+    printf("%.2f, %.2f %.2f %.2f\n",
+        v[0], v[1], v[2], v[3]);
+}
+
+typedef struct {
+    // far plane
+    vec3 c_far;  // center
+    vec3 tl_far; // top left
+    vec3 tr_far; // top right
+    vec3 bl_far; // bottom left
+    vec3 br_far; // bottom right
+
+    // near plane
+    vec3 c_near;  // center
+    vec3 tl_near; // top left
+    vec3 tr_near; // top right
+    vec3 bl_near; // bottom left
+    vec3 br_near; // bottom right
+
+    // frustum center
+    vec3 c_frustum;
+} sokol_frustum_t;
+
+static
+void vec3_copy4(vec3 src, float v4, vec4 dst) {
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+    dst[3] = v4;
+}
+
+/* Light matrix (used for shadow map calculation) */
+static
+void sokol_init_light_mat_vp(
+    sokol_render_state_t *state)
+{
+    vec3 orig = {0, 0, 0};
+    sokol_global_uniforms_t *u = &state->uniforms;
+
+    vec3 d;
+    glm_vec3_copy(u->eye_dir, d);
+
+    // Cross product of direction & up
+    vec3 right; glm_vec3_cross(d, u->eye_up, right);
+
+    float ar = state->uniforms.aspect;
+    float fov = state->uniforms.fov;
+    float near_ = state->uniforms.shadow_near;
+    float far_ = state->uniforms.shadow_far;
+
+    float Hnear = 2 * tan(fov / 2) * near_;
+    float Wnear = Hnear * ar;
+    float Hfar = 2 * tan(fov / 2) * far_;
+    float Wfar = Hfar * ar;
+    vec3 camera_pos; glm_vec3_copy(state->uniforms.eye_pos, camera_pos);
+    camera_pos[0] *= -1;
+    
+    sokol_frustum_t f_cam;
+
+    // Points on far plane
+    glm_vec3_scale(d, far_, f_cam.c_far);
+    glm_vec3_add(camera_pos, f_cam.c_far, f_cam.c_far);
+
+    vec3 u_hfar; glm_vec3_scale(u->eye_up, Hfar / 2, u_hfar);
+    vec3 r_wfar; glm_vec3_scale(right, Wfar / 2, r_wfar);
+
+    glm_vec3_add(f_cam.c_far, u_hfar, f_cam.tl_far);
+    glm_vec3_sub(f_cam.tl_far, r_wfar, f_cam.tl_far);
+
+    glm_vec3_add(f_cam.c_far, u_hfar, f_cam.tr_far);
+    glm_vec3_add(f_cam.tr_far, r_wfar, f_cam.tr_far);
+
+    glm_vec3_sub(f_cam.c_far, u_hfar, f_cam.bl_far);
+    glm_vec3_sub(f_cam.bl_far, r_wfar, f_cam.bl_far);
+
+    glm_vec3_sub(f_cam.c_far, u_hfar, f_cam.br_far);
+    glm_vec3_add(f_cam.br_far, r_wfar, f_cam.br_far);
+
+    // // Points on near plane
+    glm_vec3_scale(d, near_, f_cam.c_near);
+    glm_vec3_add(camera_pos, f_cam.c_near, f_cam.c_near);
+
+    vec3 u_hnear; glm_vec3_scale(u->eye_up, Hnear / 2, u_hnear);
+    vec3 r_wnear; glm_vec3_scale(right, Wnear / 2, r_wnear);
+
+    glm_vec3_add(f_cam.c_near, u_hnear, f_cam.tl_near);
+    glm_vec3_sub(f_cam.tl_near, r_wnear, f_cam.tl_near);
+
+    glm_vec3_add(f_cam.c_near, u_hnear, f_cam.tr_near);
+    glm_vec3_add(f_cam.tr_near, r_wnear, f_cam.tr_near);
+
+    glm_vec3_sub(f_cam.c_near, u_hnear, f_cam.bl_near);
+    glm_vec3_sub(f_cam.bl_near, r_wnear, f_cam.bl_near);
+
+    glm_vec3_sub(f_cam.c_near, u_hnear, f_cam.br_near);
+    glm_vec3_add(f_cam.br_near, r_wnear, f_cam.br_near);
+
+    // // Light "position"
+    vec3 light_pos_norm;
+    glm_vec3_scale(u->sun_direction, -1, light_pos_norm);
+    glm_vec3_normalize(light_pos_norm);
+
+    // Light view matrix
+    mat4 mat_light_view;
+    glm_lookat(light_pos_norm, orig, u->eye_up, mat_light_view);
+
+    // // Frustum to light view
+    vec4 f_light[8];
+    vec3_copy4(f_cam.br_near, 1.0, f_light[0]);
+    vec3_copy4(f_cam.tr_near, 1.0, f_light[1]);
+    vec3_copy4(f_cam.bl_near, 1.0, f_light[2]);
+    vec3_copy4(f_cam.tl_near, 1.0, f_light[3]);
+
+    vec3_copy4(f_cam.br_far, 1.0, f_light[4]);
+    vec3_copy4(f_cam.tr_far, 1.0, f_light[5]);
+    vec3_copy4(f_cam.bl_far, 1.0, f_light[6]);
+    vec3_copy4(f_cam.tl_far, 1.0, f_light[7]);
+
+    for (int i = 0; i < 8; i ++) {
+        glm_mat4_mulv(mat_light_view, f_light[i], f_light[i]);
+    }
+
+    // Find min/max points for defining the orthographic light matrix
+    vec3 min = { INFINITY, INFINITY, INFINITY };
+    vec3 max = { -INFINITY, -INFINITY, -INFINITY };
+    for (int i = 0; i < 8; i ++) {
+        for (int c = 0; c < 3; c ++) {
+            min[c] = glm_min(min[c], f_light[i][c]);
+        }
+        for (int c = 0; c < 3; c ++) {
+            max[c] = glm_max(max[c], f_light[i][c]);
+        }
+    }
+
+    // Get parameters for orthographic matrix
+    float l = min[0];
+    float r = max[0];
+    float b = min[1];
+    float t = max[1];
+    float n = -max[2];
+    float f = -min[2];
+
+    // // Discretize coordinates
+    const float step_size = 16;
+    l = floor(l / step_size) * step_size;
+    r = ceil(r / step_size) * step_size;
+    b = floor(b / step_size) * step_size;
+    t = ceil(t / step_size) * step_size;
+    n = floor(n / step_size) * step_size;
+    f = ceil(f / step_size) * step_size;
+
+    mat4 mat_light_ortho, mat_light_view_proj, mat_light_proj = {
+         { 0.5f, 0.0f, 0.0f, 0 },
+         { 0.0f, 0.5f, 0.0f, 0 },
+         { 0.0f, 0.0f, 0.5f, 0 },
+         { 0.5f, 0.5f, 0.5f, 1 }
+    };
+
+    glm_ortho(l, r, b, t, n, f, mat_light_ortho);
+    glm_mat4_mul(mat_light_proj, mat_light_ortho, mat_light_proj);
+    glm_mat4_mul(mat_light_proj, mat_light_view, mat_light_view_proj);
+
+    glm_mat4_copy(mat_light_view, u->light_mat_v);
+    glm_mat4_copy(mat_light_view_proj, u->light_mat_vp);
+}
+
+static
+void sokol_world_to_screen(
+    vec3 pos,
+    vec3 out,
+    sokol_render_state_t *state)
+{
+    vec4 pos4;
+    glm_vec3_copy(pos, pos4);
+    pos4[3] = 0.0;
+
+    glm_mat4_mulv(state->uniforms.mat_vp, pos4, pos4);
+    pos4[0] /= pos4[3];
+    pos4[1] /= pos4[3];
+
+    pos4[0] = 0.5 * (pos4[0] + 1.0);
+    pos4[1] = 0.5 * (pos4[1] + 1.0);
+    glm_vec3_copy(pos4, out);
+}
+
+/* Compute uniform values for camera & light that are used across shaders */
+static
+void sokol_init_global_uniforms(
+    sokol_render_state_t *state)
+{
+    sokol_global_uniforms_t *u = &state->uniforms;
+
+    /* Default camera parameters */
+    u->near_ = SOKOL_DEFAULT_DEPTH_NEAR;
+    u->far_ = SOKOL_DEFAULT_DEPTH_FAR;
+    u->fov = 30;
+    u->ortho = false;
+
+    /* If camera is set, get values */
+    if (state->camera) {
+        EcsCamera cam = *state->camera;
+
+        if (cam.fov) {
+            u->fov = cam.fov;
+        }
+
+        if (cam.near_ || cam.far_) {
+            u->near_ = cam.near_;
+            u->far_ = cam.far_;
+        }
+
+        if (cam.up[0] || !cam.up[1] || !cam.up[2]) {
+            glm_vec3_copy(cam.up, u->eye_up);
+        }
+
+        state->uniforms.ortho = cam.ortho;
+
+        glm_vec3_copy(cam.position, u->eye_pos);
+        u->eye_pos[0] = -u->eye_pos[0];
+        glm_vec3_copy(cam.lookat, u->eye_lookat);
+        u->eye_lookat[0] = -u->eye_lookat[0];
+    }
+
+    /* Orthographic/perspective projection matrix */
+    if (u->ortho) {
+        glm_ortho_default(u->aspect, u->mat_p);
+    } else {
+        glm_perspective(u->fov, u->aspect, u->near_, u->far_, u->mat_p);
+    }
+
+    glm_mat4_inv(u->mat_p, u->inv_mat_p);
+
+    /* View + view * projection matrix */
+    glm_lookat(u->eye_pos, u->eye_lookat, u->eye_up, u->mat_v);
+
+    /* Flip x axis so -1 is on left and 1 is on right */
+    vec3 flip_x = {-1, 1, 1};
+    glm_scale(u->mat_v, flip_x);
+
+    glm_mat4_mul(u->mat_p, u->mat_v, u->mat_vp);
+    glm_mat4_inv(u->mat_v, u->inv_mat_v);
+
+    /* Light parameters */
+    if (state->light) {
+        EcsDirectionalLight l = *state->light;
+        glm_vec3_copy(l.direction, u->sun_direction);
+        glm_vec3_copy(l.color, u->sun_color);
+        u->sun_intensity = l.intensity;
+    } else {
+        glm_vec3_zero(u->sun_direction);
+        glm_vec3_zero(u->sun_color);
+        u->sun_intensity = 1.0;
+    }
+    glm_vec3_copy((float*)&state->ambient_light, u->light_ambient);
+
+    // Direction vector
+    vec3 d; glm_vec3_sub(u->eye_lookat, u->eye_pos, d);
+    d[0] *= -1;
+    glm_vec3_normalize(d);
+    glm_vec3_copy(d, state->uniforms.eye_dir);
+
+    /* Shadow parameters */
+    float shadow_far = u->far_ > 128 ? 128 : u->far_;
+    u->shadow_map_size = SOKOL_SHADOW_MAP_SIZE;
+    u->shadow_near = -(8 + u->eye_pos[1]);
+    u->shadow_far = shadow_far;
+
+    /* Calculate light position in screen space */
+    vec3 sun_pos;
+    sun_pos[0] = -u->sun_direction[0];
+    sun_pos[1] = -u->sun_direction[1];
+    sun_pos[2] = -u->sun_direction[2];
+    sokol_world_to_screen(sun_pos, u->sun_screen_pos, state);
+
+    /* Calculate the horizon position in screen space */
+    vec3 lookat;
+    glm_vec3_copy(u->eye_lookat, lookat);
+    lookat[1] = 0;
+    sokol_world_to_screen(lookat, u->eye_horizon, state);
+}
+
+/* Render */
+static
+void SokolRender(ecs_iter_t *it) {
+    ecs_world_t *world = it->world;
+    SokolRenderer *r = ecs_field(it, SokolRenderer, 1);
+    SokolQuery *q_buffers = ecs_field(it, SokolQuery, 2);
+    sokol_render_state_t state = {0};
+    sokol_fx_resources_t *fx = r->fx;
+
+    if (it->count > 1) {
+        ecs_err("sokol: multiple canvas instances unsupported");
+    }
+
+    const ecs_world_info_t *stats = ecs_get_world_info(world);
+
+    /* Initialize renderer state */
+    state.uniforms.dt = it->delta_time;
+    state.uniforms.t = stats->world_time_total;
+    state.width = sapp_width();
+    state.height = sapp_height();
+    state.uniforms.aspect = (float)state.width / (float)state.height;
+    state.world = world;
+    state.q_scene = q_buffers->query;
+    state.shadow_map = r->shadow_pass.color_target;
+    state.resources = &r->resources;
+
+    const EcsCanvas *canvas = ecs_get(world, r->canvas, EcsCanvas);
+
+    /* Resize resources if canvas changed */
+    if (state.width != canvas->width || state.height != canvas->height) {
+        EcsCanvas *canvas_w = ecs_get_mut(world, r->canvas, EcsCanvas);
+        canvas_w->width = state.width;
+        canvas_w->height = state.height;
+        ecs_modified(world, r->canvas, EcsCanvas);
+
+        ecs_dbg_3("sokol: update canvas size to %d, %d", state.width, state.height);
+        sokol_update_scene_pass(&r->scene_pass, state.width, state.height,
+            &r->depth_pass);
+        sokol_update_fx(r->fx, state.width, state.height);
+    }
+
+    /* Load active camera & light data from canvas */
+    if (canvas->camera) {
+        state.camera = ecs_get(world, canvas->camera, EcsCamera);
+        r->camera = canvas->camera;
+    }
+
+    /* Get atmosphere settings */
+    state.atmosphere = ecs_get(world, r->canvas, EcsAtmosphere);
+
+    /* Get ambient light */
+    state.ambient_light = canvas->ambient_light;
+
+    if (canvas->directional_light) {
+        state.light = ecs_get(world, canvas->directional_light, 
+            EcsDirectionalLight);
+    } else {
+        /* Set default ambient light if nothing is configured */
+        if (!state.ambient_light.r && !state.ambient_light.g && 
+            !state.ambient_light.b) 
+        {
+            state.ambient_light = (EcsRgb){1.0, 1.0, 1.0};
+        }
+    }
+
+    /* Compute uniforms that are shared between passes */
+    sokol_init_global_uniforms(&state);
+
+    /* Compute shadow parameters and run shadow pass */
+    if (canvas->directional_light) {
+        sokol_init_light_mat_vp(&state);
+        sokol_run_shadow_pass(&r->shadow_pass, &state);
+    }
+
+    /* Depth prepass for more efficient drawing */
+    sokol_run_depth_pass(&r->depth_pass, &state);
+
+    /* Render atmosphere */
+    if (state.atmosphere) {
+        sokol_run_atmos_pass(&r->atmos_pass, &state);
+        state.atmos = r->atmos_pass.color_target;
+    } else {
+        state.atmos = r->resources.bg_texture;
+    }
+
+    /* Render scene */
+    sokol_run_scene_pass(&r->scene_pass, &state);
+    sg_image hdr = r->scene_pass.color_target;
+
+    /* Ssao */
+    sg_image ssao = sokol_fx_run(&fx->ssao, 2, (sg_image[]){ 
+        hdr, r->depth_pass.color_target }, 
+            &state, 0);
+
+    /* Fog */
+    const EcsRgb *bg_color = &canvas->background_color;
+    sokol_fog_set_params(&fx->fog, canvas->fog_density, 
+        bg_color->r, bg_color->g, bg_color->b, state.uniforms.eye_horizon[1]);
+    sg_image scene_with_fog = sokol_fx_run(&fx->fog, 3, (sg_image[]){ 
+        ssao, r->depth_pass.color_target, state.atmos },
+            &state, 0);
+
+    /* HDR */
+    sokol_fx_run(&fx->hdr, 1, (sg_image[]){ scene_with_fog },
+        &state, &r->screen_pass);
+}
+
+static
+void SokolCommit(ecs_iter_t *it) {
+    sg_commit();
+}
+
+/* Initialize renderer & resources */
+static
+void SokolInitRenderer(ecs_iter_t *it) {
+    ecs_world_t *world = it->world;
+    EcsCanvas *canvas = ecs_field(it, EcsCanvas, 1);
+
+    if (it->count > 1) {
+        ecs_err("sokol: multiple canvas instances unsupported");
+    }
+
+    ecs_trace("#[bold]sokol: initializing renderer");
+    ecs_log_push();
+
+    int w = sapp_width();
+    int h = sapp_height();
+
+    sg_setup(&(sg_desc) {
+        .context.depth_format = SG_PIXELFORMAT_NONE,
+        .buffer_pool_size = 16384,
+        .logger = { slog_func }
+    });
+
+    assert(sg_isvalid());
+    ecs_trace("sokol: library initialized");
+
+    sokol_resources_t resources = sokol_init_resources();
+    resources.bg_texture = sokol_bg_texture(canvas->background_color, 2, 2);
+
+    sokol_offscreen_pass_t depth_pass;
+    sokol_offscreen_pass_t scene_pass = sokol_init_scene_pass(
+        canvas->background_color, w, h, 1, &depth_pass);
+    sokol_offscreen_pass_t atmos_pass = sokol_init_atmos_pass();
+
+    ecs_set(world, SokolRendererInst, SokolRenderer, {
+        .canvas = it->entities[0],
+        .resources = resources,
+        .depth_pass = depth_pass,
+        .shadow_pass = sokol_init_shadow_pass(SOKOL_SHADOW_MAP_SIZE),
+        .scene_pass = scene_pass,
+        .atmos_pass = atmos_pass,
+        .screen_pass = sokol_init_screen_pass(),
+        .fx = sokol_init_fx(w, h)
+    });
+
+    ecs_trace("sokol: canvas initialized");
+
+    ecs_set(world, SokolRendererInst, SokolMaterials, { true });
+
+    ecs_set_pair(world, SokolRendererInst, SokolQuery, ecs_id(SokolGeometry), {
+        ecs_query_new(world, "[in] flecs.systems.sokol.Geometry")
+    });
+
+    sokol_init_geometry(world, &resources);
+    ecs_trace("sokol: static geometry resources initialized");
+
+    ecs_log_pop();
+}
+
+/* Cleanup renderer */
+static
+void SokolFiniRenderer(ecs_iter_t *it) {
+    ecs_trace("sokol: shutting down");
+    sg_shutdown();
+}
+
+void FlecsSystemsSokolRendererImport(
+    ecs_world_t *world)
+{
+    ECS_MODULE(world, FlecsSystemsSokolRenderer);
+    ECS_IMPORT(world, FlecsSystemsSokolMaterials);
+    ECS_IMPORT(world, FlecsSystemsSokolGeometry);
+
+    /* Create components in parent scope */
+    ecs_entity_t parent = ecs_lookup_fullpath(world, "flecs.systems.sokol");
+    ecs_entity_t module = ecs_set_scope(world, parent);
+    ecs_set_name_prefix(world, "Sokol");
+
+    ECS_COMPONENT_DEFINE(world, SokolRenderer);
+
+    /* Register systems in module scope */
+    ecs_set_scope(world, module);
+
+    /* System that initializes renderer */
+    ECS_SYSTEM(world, SokolInitRenderer, EcsOnLoad,
+        flecs.components.gui.Canvas, 
+        [out] !flecs.systems.sokol.Renderer($));
+
+    /* Configure no_readonly for SokolInitRenderer as it needs direct access to
+     * the world for creating queries */
+    ecs_system(world, {
+        .entity = SokolInitRenderer,
+        .no_readonly = true
+    });
+
+    /* System that cleans up renderer */
+    ECS_OBSERVER(world, SokolFiniRenderer, EcsUnSet, 
+        flecs.systems.sokol.Renderer);
+
+    /* System that orchestrates the render tasks */
+    ECS_SYSTEM(world, SokolRender, EcsOnStore, 
+        flecs.systems.sokol.Renderer,
+        (sokol.Query, Geometry));
+
+    /* System that calls sg_commit */
+    ECS_SYSTEM(world, SokolCommit, EcsOnStore, 0);
+}
 

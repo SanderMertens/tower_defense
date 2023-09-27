@@ -46,7 +46,7 @@ void FlecsComponentsGeometryImport(
     ECS_META_COMPONENT(world, EcsLine2);
     ECS_META_COMPONENT(world, EcsLine3);
     ECS_META_COMPONENT(world, EcsRectangle);
-    ECS_META_COMPONENT(world, EcsSquare);
+    ECS_META_COMPONENT(world, EcsStroke);
     ECS_META_COMPONENT(world, EcsBox);
     ECS_META_COMPONENT(world, EcsCircle);
 

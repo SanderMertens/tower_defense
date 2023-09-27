@@ -54,6 +54,9 @@ FLECS_COMPONENTS_CGLM_API
 extern ECS_COMPONENT_DECLARE(vec3);
 
 FLECS_COMPONENTS_CGLM_API
+extern ECS_COMPONENT_DECLARE(vec4);
+
+FLECS_COMPONENTS_CGLM_API
 void FlecsComponentsCglmImport(
     ecs_world_t *world);
 
