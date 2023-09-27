@@ -33234,6 +33234,10 @@ void CreateGeometryQueries(ecs_iter_t *it) {
                     .id        = ecs_id(EcsEmissive),
                     .inout     = EcsInOutNone,
                     .oper      = EcsNot
+                }, {
+                    .id        = ecs_id(EcsPosition3), 
+                    .inout     = EcsInOutNone,
+                    .src.flags = EcsSelf
                 }},
                 .instanced = true
             },
