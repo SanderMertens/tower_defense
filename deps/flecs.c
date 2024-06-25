@@ -8605,7 +8605,6 @@ ecs_entity_t ecs_get_target(
         ecs_id_record_t *wc_idr = flecs_id_record_get(world, wc);
         ecs_assert(wc_idr != NULL, ECS_INTERNAL_ERROR, NULL);
         result = flecs_switch_get(wc_idr->sparse, (uint32_t)entity);
-        // ecs_assert(result != EcsUnion, ECS_INTERNAL_ERROR, NULL);
     }
 
     return result;
@@ -26529,8 +26528,8 @@ void DequeueRest(ecs_iter_t *it) {
     for(i = 0; i < it->count; i ++) {
         ecs_rest_ctx_t *ctx = rest[i].impl;
         if (ctx) {
-            double elapsed = wi->world_time_total_raw - ctx->last_time;
-            ecs_http_server_dequeue(ctx->srv, (float)elapsed);
+            float elapsed = (float)(wi->world_time_total_raw - ctx->last_time);
+            ecs_http_server_dequeue(ctx->srv, (ecs_ftime_t)elapsed);
             flecs_rest_server_garbage_collect(it->world, ctx);
             ctx->last_time = wi->world_time_total_raw;
         }
@@ -54285,8 +54284,13 @@ ecs_entity_t flecs_binary_expr_type(
     }
 
     if (flecs_expr_op_is_equality(op)) {
+        char *lstr = ecs_id_str(world, ltype);
+        char *rstr = ecs_id_str(world, rtype);
         ecs_parser_error(name, expr, ptr - expr, 
-            "mismatching types in equality expression");
+            "mismatching types in equality expression (%s vs %s)",
+                lstr, rstr);
+        ecs_os_free(rstr);
+        ecs_os_free(lstr);
         return 0;
     }
 
@@ -54498,6 +54502,7 @@ const char* flecs_binary_expr_parse(
     ecs_entity_t result_type = result->type;
     do {
         ecs_expr_oper_t op;
+
         ptr = flecs_str_to_expr_oper(ptr, &op);
         if (!ptr) {
             ecs_parser_error(name, expr, ptr - expr, "invalid operator");
@@ -54903,7 +54908,8 @@ const char* flecs_script_expr_run(
                     }
 
                     result.type = type;
-                    result.ptr = (void*)ecs_get_id(world, e, component);
+                    result.ptr = ECS_CONST_CAST(void*, 
+                        ecs_get_id(world, e, component));
                     if (!result.ptr) {
                         char *entitystr = ecs_id_str(world, e);
                         char *idstr = ecs_id_str(world, component);
@@ -60177,12 +60183,21 @@ int flecs_script_eval_if(
     ecs_script_eval_visitor_t *v,
     ecs_script_if_t *node)
 {
-    bool cond = false;
-    ecs_value_t condval = { .type = ecs_id(ecs_bool_t), .ptr = &cond };
-
+    ecs_value_t condval = { .type = 0, .ptr = NULL };
     if (flecs_script_eval_expr(v, node->expr, &condval)) {
         return -1;
     }
+
+    bool cond;
+    if (condval.type == ecs_id(ecs_bool_t)) {
+        cond = *(bool*)(condval.ptr);
+    } else {
+        ecs_meta_cursor_t cur = ecs_meta_cursor(
+            v->world, condval.type, condval.ptr);
+        cond = ecs_meta_get_bool(&cur);
+    }
+
+    ecs_value_free(v->world, condval.type, condval.ptr);
 
     if (flecs_script_eval_scope(v, cond ? node->if_true : node->if_false)) {
         return -1;
@@ -62486,8 +62501,8 @@ void OnSetWorldSummary(ecs_iter_t *it) {
 
     int32_t i, count = it->count;
     for (i = 0; i < count; i ++) {
-        ecs_set_target_fps(it->world, (float)summary[i].target_fps);
-        ecs_set_time_scale(it->world, (float)summary[i].time_scale);
+        ecs_set_target_fps(it->world, (ecs_ftime_t)summary[i].target_fps);
+        ecs_set_time_scale(it->world, (ecs_ftime_t)summary[i].time_scale);
     }
 }
 

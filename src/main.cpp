@@ -22,8 +22,8 @@ using Box = geometry::Box;
 
 // Game constants
 static const int LevelScale = 1;
-static const float EnemySpeed = 8.0;
-static const float EnemySpawnInterval = 0.07;
+static const float EnemySpeed = 5.0;
+static const float EnemySpawnInterval = 0.12;
 
 static const float RecoilAmount = 0.3;
 static const float DecreaseRecoilRate = 1.5;
@@ -36,9 +36,9 @@ static const float TurretCannonOffset = 0.2;
 static const float TurretCannonLength = 0.6;
 
 static const float BulletSpeed = 26.0;
-static const float BulletDamage = 0.012;
+static const float BulletDamage = 0.01;
 
-static const float BeamDamage = 0.30;
+static const float BeamDamage = 0.09;
 static const float BeamSize = 0.06;
 
 static const float SmokeSize = 1.5;
@@ -50,7 +50,7 @@ static const int SparkParticleCount = 30;
 static const float SparkSize = 0.15;
 
 static const float TileSize = 3.0;
-static const float TileHeight = 0.5;
+static const float TileHeight = 0.6;
 static const float TileSpacing = 0.00;
 static const int TileCountX = 20;
 static const int TileCountZ = 20;
@@ -231,9 +231,8 @@ struct Target {
 // Prefab types
 namespace prefabs {
     struct Tree {
-        struct Trunk { };
-        struct Canopy { };
-        struct CanopyTop { };
+        float height;
+        float variation;
     };
 
     struct Tile { };
@@ -252,6 +251,7 @@ namespace prefabs {
     struct NozzleFlash { };
     struct Smoke { };
     struct Spark { };
+    struct Ion { };
     struct Bolt { };
 
     struct Turret {
@@ -264,7 +264,6 @@ namespace prefabs {
             struct BarrelLeft { };
             struct BarrelRight { };
         };
-        struct Barrel { };
     };
 
     struct Laser {
@@ -272,8 +271,6 @@ namespace prefabs {
             struct Beam { };
         };
     };
-
-    struct Block { };
 }
 
 // Scope for systems
@@ -506,7 +503,7 @@ void AimTarget(flecs::iter& it, size_t i,
         // Crude correction for enemy movement and bullet travel time
         flecs::entity beam = e.target<prefabs::Laser::Head::Beam>();
         if (!beam) {
-            glm_vec3_scale(diff, distance * 5, diff);
+            glm_vec3_scale(diff, distance * 1, diff);
             glm_vec3_add(target_p, diff, target_p);
         }
 
@@ -626,6 +623,21 @@ void BeamControl(flecs::iter& it, size_t i,
             h.value -= BeamDamage * it.delta_time();
             hc.value = HitCooldownInitialValue;
         });
+
+        // Generate spark   
+        {     
+            float x_r = randf(ECS_PI_2);
+            float y_r = randf(ECS_PI_2);
+            float z_r = randf(ECS_PI_2);
+            float speed = randf(5) + 2.0;
+            float size = randf(0.15);
+
+            it.world().scope<particles>().entity().is_a<prefabs::Ion>()
+                .set<Position>({target_pos.x, target_pos.y, target_pos.z}) 
+                .set<Box>({size, size, size})
+                .set<Velocity>({
+                    cos(x_r) * speed, fabs(cos(y_r) * speed), cos(z_r) * speed});
+        }
     }
 }
 
@@ -742,7 +754,7 @@ void DestroyEnemy(flecs::entity e, Health& h, Position& p) {
     flecs::world ecs = e.world();
     if (h.value <= 0) {
         e.destruct();
-        explode(ecs, p, 2.0, 1.2, {0.5, 0.2, 0.0}, {0.7, 0.0, 0.0});
+        explode(ecs, p, 1.0, 1.0, {0.5, 0.2, 0.0}, {0.7, 0.0, 0.0});
     }
 }
 
@@ -798,6 +810,7 @@ void init_game(flecs::world& ecs) {
     ecs.script().filename("etc/assets/nozzle_flash.flecs").run();
     ecs.script().filename("etc/assets/smoke.flecs").run();
     ecs.script().filename("etc/assets/spark.flecs").run();
+    ecs.script().filename("etc/assets/ion.flecs").run();
     ecs.script().filename("etc/assets/bolt.flecs").run();
     ecs.script().filename("etc/assets/enemy.flecs").run();
     ecs.script().filename("etc/assets/turret.flecs").run();
@@ -855,9 +868,12 @@ void init_level(flecs::world& ecs) {
 
                 auto e = ecs.entity().set<Position>({xc, TileHeight / 2, zc});
                 if (!canTurret || (randf(1) > 0.5)) {
-                    if (randf(1) > 0.2) {
+                    if (randf(1) > 0.05) {
                         e.child_of<level>();
-                        e.is_a<prefabs::Tree>();
+                        e.set<prefabs::Tree>({
+                            1.5 + randf(2.5),
+                            randf(0.1)
+                        });
                     } else {
                         e.destruct();
                     }

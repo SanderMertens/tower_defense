@@ -1,0 +1,21 @@
+module prefabs
+using flecs.components.*
+
+const IonSize = 0.15
+const IonLifespan = 0.8
+const IonSizeDecay = 0.025
+const IonVelocityDecay = 0.01
+const IonInitialVelocity = 11.0
+
+prefab Ion : Particle {
+  Rgb: {0.1, 0.24, 1.0}
+  Emissive: {10.0}
+  Box: {$IonSize, $IonSize, $IonSize}
+
+  #0.Particle: {
+    size_decay: 0.01,
+    color_decay: 0.003,
+    velocity_decay: 0.02,
+    lifespan: 1.0
+  }
+}

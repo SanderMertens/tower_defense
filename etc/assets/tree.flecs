@@ -1,20 +1,57 @@
 module prefabs
 using flecs.components.*
+using flecs.meta
 
-prefab Tree {
-  Trunk {
-    Position3: {0, 0.75, 0}
-    Rgb: {0.25, 0.2, 0.1}
-    Box: {0.5, 1.5, 0.5}
-  }
-  Canopy {
-    Position3: {0, 2.0, 0}
-    Rgb: {0.2, 0.3, 0.15}
-    Box: {1.5, 1.8, 1.5}
-  }
-  CanopyTop {
-    Position3: {0, 2.3, 0}
-    Rgb: {0.2, 0.3, 0.15}
-    Box: {1.0, 1.8, 1.0}
+template Tree {
+  prop height = f32: 4.0
+  prop variation = f32: 0.0
+
+  const trunk_height = 0.7
+  const canopy_color = Rgb: {0.2 + $variation, 0.27, 0.12}
+
+  if $height > 2.5 {
+    Trunk {
+      const trunk_width = 0.5
+
+      Position3: {0, ($trunk_height / 2), 0}
+      Box: {$trunk_width, $trunk_height, $trunk_width}
+      Rgb: {0.25, 0.2, 0.1}
+    }
+
+    Canopy {
+      const canopy_height = $height - $trunk_height
+      const canopy_y = $trunk_height + ($canopy_height / 2)
+      const canopy_width = 1.4
+      const canopy_top_width = $canopy_width - 0.5
+
+      _ {
+        Position3: {0, $canopy_y, 0}
+        Box: {$canopy_width, $canopy_height - 0.75, $canopy_width}
+        $canopy_color
+      }
+      _ {
+        Position3: {0, $canopy_y, 0}
+        Box: {$canopy_top_width, $canopy_height, $canopy_top_width}
+        $canopy_color
+      }
+    }
+  } else {
+    Bush {
+      const canopy_height = $height - 1.0
+      const canopy_y = ($canopy_height / 2)
+      const canopy_width = 1.0
+      const canopy_top_width = $canopy_width - 0.5
+
+      _ {
+        Position3: {0, $canopy_y - 0.1, 0}
+        Box: {$canopy_width, $canopy_height - 0.2, $canopy_width}
+        $canopy_color
+      }
+      _ {
+        Position3: {0, $canopy_y, 0}
+        Box: {$canopy_top_width, $canopy_height, $canopy_top_width}
+        $canopy_color
+      }
+    }
   }
 }

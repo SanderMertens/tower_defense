@@ -12,12 +12,12 @@ prefab Laser : Turret {
     Position3: {0, 0.8, 0}
     Rotation3: {0, 0, 0}
 
-    _ : materials.Metal {
+    _ : materials.DarkMetal {
         Box: {0.9, 0.3, 0.16}
         Position3: {0.1, 0, -0.3}
     }
 
-    _ : materials.Metal {
+    _ : materials.DarkMetal {
         Box: {0.9, 0.3, 0.16}
         Position3: {0.1, 0, 0.3}
     }

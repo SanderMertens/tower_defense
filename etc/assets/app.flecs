@@ -15,7 +15,7 @@ camera {
 
 sun {
   DirectionalLight: {
-    direction: [-0.4, -0.8, 0.2],
+    direction: [0.4, -0.9, 0.2],
     color: [0.98, 0.95, 0.8],
     intensity: 0.5,
   }
@@ -28,7 +28,7 @@ canvas {
     title: "Flecs Tower Defense",
     camera: camera,
     directional_light: sun,
-    ambient_light: {0.12, 0.12, 0.4},
+    ambient_light: {0.1, 0.1, 0.3},
     background_color: {0.12, 0.25, 0.5},
     fog_density: 2.5,
     shadow_far: 40

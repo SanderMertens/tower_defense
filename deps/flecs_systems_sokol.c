@@ -32078,7 +32078,7 @@ SokolFx sokol_init_hdr(
 
     int threshold = sokol_fx_add_pass(&fx, &(sokol_fx_pass_desc_t){
         .name = "threshold",
-        .outputs = {{256}},
+        .outputs = {{1024}},
         .shader = shd_threshold,
         .color_format = SG_PIXELFORMAT_RGBA16F,
         .inputs = { "hdr" },
@@ -32106,7 +32106,7 @@ SokolFx sokol_init_hdr(
                 .name = "halo hblur",
                 .inputs = { {SOKOL_FX_PASS(threshold), 0} },
                 .params = { 1.0 },
-                .loop_count = 4
+                .loop_count = 5
             },
             [1] = { 
                 .name = "halo vblur",

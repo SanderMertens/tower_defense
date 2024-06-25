@@ -26,5 +26,20 @@ prefab Cannon : Turret {
       (SlotOf, Cannon)
       Position3: {$TurretCannonLength, 0, $TurretCannonOffset}
     }
+
+    Radio : materials.Metal {
+      Box: {0.14, 0.28, 0.4}
+      Position3: {-0.47, 0, -0.1}
+
+      AntennaOne : materials.Metal {
+        Box: {0.07, 0.4, 0.07}
+        Position3: {0, 0.2, -0.1}
+      }
+
+      AntennaTwo : materials.Metal {
+        Box: {0.07, 0.6, 0.07}
+        Position3: {0, 0.3, 0.1}
+      }
+    }
   }
 }

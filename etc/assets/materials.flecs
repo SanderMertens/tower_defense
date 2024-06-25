@@ -8,7 +8,12 @@ prefab Beam {
 
 prefab Metal {
   Rgb: {0.1, 0.1, 0.1}
-  Specular: {1.5, 128}
+  Specular: {15, 25}
+}
+
+prefab DarkMetal {
+  Rgb: {0.05, 0.05, 0.05}
+  Specular: {15, 25}
 }
 
 prefab Stone {
@@ -16,8 +21,8 @@ prefab Stone {
 }
 
 prefab LaserLight {
-  Rgb: {0.1, 0.3, 1.0}
-  Emissive: {3.0}
+  Rgb: {0.1, 0.25, 2.0}
+  Emissive: {5.0}
 }
 
 prefab CannonHead {
