@@ -8,7 +8,6 @@ uniform float u_shadow_map_size;
 uniform sampler2D shadow_map;
 uniform float u_shadow_far;
 
-
 in vec4 position;
 in vec4 light_position;
 in vec3 normal;
@@ -16,10 +15,9 @@ in vec4 color;
 in vec3 material;
 out vec4 frag_color;
 
-const int pcf_count = 4;
+const int pcf_count = 1;
 const int pcf_samples = (2 * pcf_count + 1) * (2 * pcf_count + 1);
 const float texel_c = 1.0;
-const float soft_shadow_edge = 10.0;
 
 float sampleShadow(sampler2D shadowMap, vec2 uv, float compare, float bias) {
   float depth = rgba_to_float(texture(shadowMap, vec2(uv.x, uv.y)));
@@ -31,22 +29,23 @@ float sampleShadowPCF(sampler2D shadowMap, vec2 uv, float texel_size, float comp
   float result = 0.0;
   float cos_theta = clamp(n_dot_l, 0.0, 1.0);
   float bias = 0.003 * tan(acos(cos_theta));
-  
-  float edge = clamp(d - (u_shadow_far - soft_shadow_edge), 0.0, soft_shadow_edge + 0.1);
-  if (edge >= soft_shadow_edge) {
+
+  if (uv.x < 0 || uv.x > 1) {
+    return 1.0;
+  }
+  if (uv.y < 0 || uv.y > 1) {
     return 1.0;
   }
 
-  edge *= (1.0 / soft_shadow_edge);
-
   for (int x = -pcf_count; x <= pcf_count; x++) {
       for (int y = -pcf_count; y <= pcf_count; y++) {
-          result += sampleShadow(shadowMap, uv + vec2(x, y) * texel_size * texel_c, compare, bias);
+          result += sampleShadow(
+            shadowMap, uv + vec2(x, y) * texel_size * texel_c, compare, bias);
       }
   }
 
   result /= float(pcf_samples);
-  result = mix(result, 1.0, edge);
+
   return result;
 }
 

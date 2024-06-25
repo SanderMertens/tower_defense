@@ -1,4 +1,20 @@
 {
+    "dependee": {
+        "lang.c": {
+            "${cfg sanitize}": {
+                "defines": [
+                    "FLECS_SANITIZE"
+                ]
+            }
+        },
+        "lang.cpp": {
+            "${cfg sanitize}": {
+                "defines": [
+                    "FLECS_SANITIZE"
+                ]
+            }
+        }
+    },
     "lang.c": {
         "${os linux}": {
             "lib": [

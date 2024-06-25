@@ -52,9 +52,12 @@
 #define ECS_META_IMPL EXTERN // Ensure meta symbols are only defined once
 #endif
 
+#define ECS_INPUT_MAX_CLASS_COUNT (64)
+
 FLECS_COMPONENTS_INPUT_API
 ECS_STRUCT(ecs_key_state_t, {
-    bool pressed;
+    bool up;
+    bool down;
     bool state;
     bool current;
 });
@@ -66,13 +69,14 @@ ECS_STRUCT(ecs_mouse_coord_t, {
 });
 
 FLECS_COMPONENTS_INPUT_API
-ECS_STRUCT( ecs_mouse_state_t, {
+ECS_STRUCT(ecs_mouse_state_t, {
     ecs_key_state_t left;
     ecs_key_state_t right;
-    ecs_mouse_coord_t wnd;
-    ecs_mouse_coord_t rel;
+    ecs_mouse_coord_t screen;
+    ecs_mouse_coord_t window;
     ecs_mouse_coord_t view;
     ecs_mouse_coord_t scroll;
+    bool moved;
 });
 
 FLECS_COMPONENTS_INPUT_API
@@ -80,6 +84,50 @@ ECS_STRUCT(EcsInput, {
     ecs_key_state_t keys[128];
     ecs_mouse_state_t mouse;
 });
+
+FLECS_COMPONENTS_INPUT_API
+ECS_STRUCT(EcsInputState, {
+    bool hover;
+    bool drag;
+    bool lmb_down;
+    bool rmb_down;
+    float mouse_x;
+    float mouse_y;
+    float drag_anchor_x;
+    float drag_anchor_y;
+});
+
+typedef struct EcsEventListener {
+    ecs_iter_action_t on_enter;
+    ecs_iter_action_t on_leave;
+    ecs_iter_action_t on_lmb_down;
+    ecs_iter_action_t on_lmb_up;
+    ecs_iter_action_t on_rmb_down;
+    ecs_iter_action_t on_rmb_up;
+    ecs_iter_action_t on_drag;
+
+    void *ctx;
+    void *binding_ctx;
+
+    ecs_ctx_free_t ctx_free;
+    ecs_ctx_free_t binding_ctx_free;
+} EcsEventListener;
+
+FLECS_COMPONENTS_INPUT_API
+extern ECS_COMPONENT_DECLARE(EcsEventListener);
+
+ECS_STRUCT(ecs_classlist_added_by_t, {
+    ecs_id_t added;
+    ecs_entity_t by;
+});
+
+typedef struct EcsClassList {
+    ecs_vec_t classes;
+    ecs_vec_t added_by;
+} EcsClassList;
+
+FLECS_COMPONENTS_INPUT_API
+extern ECS_COMPONENT_DECLARE(EcsClassList);
 
 #ifdef __cplusplus
 extern "C" {
@@ -189,11 +237,216 @@ void FlecsComponentsInputImport(
 #ifndef FLECS_NO_CPP
 
 namespace flecs {
+
 namespace components {
 
 class input {
 public:
     using Input = EcsInput;
+    using InputState = EcsInputState;
+
+    struct EventListener : EcsEventListener {
+    private:
+        struct binding_ctx_t {
+            void *on_enter = nullptr;
+            void *on_leave = nullptr;
+            void *on_lmb_down = nullptr;
+            void *on_lmb_up = nullptr;
+            void *on_rmb_down = nullptr;
+            void *on_rmb_up = nullptr;
+            void *on_drag = nullptr;
+
+            ecs_ctx_free_t free_on_enter;
+            ecs_ctx_free_t free_on_leave;
+            ecs_ctx_free_t free_on_lmb_down;
+            ecs_ctx_free_t free_on_lmb_up;
+            ecs_ctx_free_t free_on_rmb_down;
+            ecs_ctx_free_t free_on_rmb_up;
+            ecs_ctx_free_t free_on_drag;
+        };
+
+        template <typename Delegate>
+        static void run_on_enter(ecs_iter_t *it) {
+            it->binding_ctx = static_cast<binding_ctx_t*>(it->binding_ctx)->on_enter;
+            if (it->binding_ctx) {
+                Delegate::run(it);
+            }
+        }
+
+        template <typename Delegate>
+        static void run_on_leave(ecs_iter_t *it) {
+            it->binding_ctx = static_cast<binding_ctx_t*>(it->binding_ctx)->on_leave;
+            if (it->binding_ctx) {
+                Delegate::run(it);
+            }
+        }
+
+        template <typename Delegate>
+        static void run_on_lmb_down(ecs_iter_t *it) {
+            it->binding_ctx = static_cast<binding_ctx_t*>(it->binding_ctx)->on_lmb_down;
+            if (it->binding_ctx) {
+                Delegate::run(it);
+            }
+        }
+
+        template <typename Delegate>
+        static void run_on_lmb_up(ecs_iter_t *it) {
+            it->binding_ctx = static_cast<binding_ctx_t*>(it->binding_ctx)->on_lmb_up;
+            if (it->binding_ctx) {
+                Delegate::run(it);
+            }
+        }
+
+        template <typename Delegate>
+        static void run_on_rmb_down(ecs_iter_t *it) {
+            it->binding_ctx = static_cast<binding_ctx_t*>(it->binding_ctx)->on_rmb_down;
+            if (it->binding_ctx) {
+                Delegate::run(it);
+            }
+        }
+
+        template <typename Delegate>
+        static void run_on_rmb_up(ecs_iter_t *it) {
+            it->binding_ctx = static_cast<binding_ctx_t*>(it->binding_ctx)->on_rmb_up;
+            if (it->binding_ctx) {
+                Delegate::run(it);
+            }
+        }
+
+        template <typename Delegate>
+        static void run_on_drag(ecs_iter_t *it) {
+            it->binding_ctx = static_cast<binding_ctx_t*>(it->binding_ctx)->on_drag;
+            if (it->binding_ctx) {
+                Delegate::run(it);
+            }
+        }
+
+        static void free_binding_ctx(void *arg) {
+            binding_ctx_t *ctx = static_cast<binding_ctx_t*>(arg);
+            if (ctx->on_enter) ctx->free_on_enter(ctx->on_enter);
+            if (ctx->on_leave) ctx->free_on_enter(ctx->on_leave);
+            if (ctx->on_lmb_down) ctx->free_on_enter(ctx->on_lmb_down);
+            if (ctx->on_lmb_up) ctx->free_on_enter(ctx->on_lmb_up);
+            if (ctx->on_rmb_down) ctx->free_on_enter(ctx->on_rmb_down);
+            if (ctx->on_rmb_up) ctx->free_on_enter(ctx->on_rmb_up);
+            if (ctx->on_drag) ctx->free_on_enter(ctx->on_drag);
+        }
+
+        binding_ctx_t* get_binding_ctx() {
+            if (this->binding_ctx) {
+                return static_cast<binding_ctx_t*>(this->binding_ctx);
+            } else {
+                this->binding_ctx_free = free_binding_ctx;
+                return static_cast<binding_ctx_t*>(
+                    this->binding_ctx = new binding_ctx_t{});
+            }
+        }
+
+    public:
+        template <typename Func, typename Delegate = flecs::delegate<Func, InputState>>
+        void on_enter(const Func& func) {
+            this->EcsEventListener::on_enter = run_on_enter<Delegate>;
+            binding_ctx_t *ctx = get_binding_ctx();
+            ctx->on_enter = Delegate::make(func);
+            ctx->free_on_enter = Delegate::free;
+        }
+
+        template <typename Func, typename Delegate = flecs::delegate<Func, InputState>>
+        void on_leave(const Func& func) {
+            this->EcsEventListener::on_leave = run_on_leave<Delegate>;
+            binding_ctx_t *ctx = get_binding_ctx();
+            ctx->on_leave = Delegate::make(func);
+            ctx->free_on_leave = Delegate::free;
+        }
+
+        template <typename Func, typename Delegate = flecs::delegate<Func, InputState>>
+        void on_lmb_down(const Func& func) {
+            this->EcsEventListener::on_lmb_down = run_on_lmb_down<Delegate>;
+            binding_ctx_t *ctx = get_binding_ctx();
+            ctx->on_lmb_down = Delegate::make(func);
+            ctx->free_on_lmb_down = Delegate::free;
+        }
+
+        template <typename Func, typename Delegate = flecs::delegate<Func, InputState>>
+        void on_lmb_up(const Func& func) {
+            this->EcsEventListener::on_lmb_up = run_on_lmb_up<Delegate>;
+            binding_ctx_t *ctx = get_binding_ctx();
+            ctx->on_lmb_up = Delegate::make(func);
+            ctx->free_on_lmb_up = Delegate::free;
+        }
+
+        template <typename Func, typename Delegate = flecs::delegate<Func, InputState>>
+        void on_rmb_down(const Func& func) {
+            this->EcsEventListener::on_rmb_down = run_on_rmb_down<Delegate>;
+            binding_ctx_t *ctx = get_binding_ctx();
+            ctx->on_rmb_down = Delegate::make(func);
+            ctx->free_on_rmb_down = Delegate::free;
+        }
+
+        template <typename Func, typename Delegate = flecs::delegate<Func, InputState>>
+        void on_rmb_up(const Func& func) {
+            this->EcsEventListener::on_rmb_up = run_on_rmb_up<Delegate>;
+            binding_ctx_t *ctx = get_binding_ctx();
+            ctx->on_rmb_up = Delegate::make(func);
+            ctx->free_on_rmb_up = Delegate::free;
+        }
+
+        template <typename Func, typename Delegate = flecs::delegate<Func, InputState>>
+        void on_drag(const Func& func) {
+            this->EcsEventListener::on_drag = run_on_drag<Delegate>;
+            binding_ctx_t *ctx = get_binding_ctx();
+            ctx->on_drag = Delegate::make(func);
+            ctx->free_on_drag = Delegate::free;
+        }
+    };
+
+    struct ClassList : EcsClassList {
+        void add(flecs::entity_t clss) {
+            ecs_vec_t *vec = &this->classes;
+            flecs::entity_t *arr = ecs_vec_first_t(vec, flecs::entity_t);
+            int32_t count = ecs_vec_count(vec);
+
+            // Ensure there are no duplicates
+            for (int32_t i = 0; i < count; i ++) {
+                if (arr[i] == clss) {
+                    return;
+                }
+            }
+
+            ecs_vec_append_t(NULL, vec, flecs::entity_t)[0] = clss;
+        }
+
+        void remove(flecs::entity_t clss) {
+            ecs_vec_t *vec = &this->classes;
+            flecs::entity_t *arr = ecs_vec_first_t(vec, flecs::entity_t);
+            int32_t count = ecs_vec_count(vec);
+
+            for (int32_t i = 0; i < count; i ++) {
+                if (arr[i] == clss) {
+                    /* Preserve order (vs. moving last element) */
+                    int32_t to_move = count - i - 1;
+                    if (to_move) {
+                        ecs_os_memmove_n(
+                            &arr[i], &arr[i + 1], flecs::entity_t, to_move);
+                    }
+
+                    /* Reduce length of vector by one */
+                    ecs_vec_remove_last(vec);
+                    break;
+                }
+            }
+        }
+
+        template <typename T>
+        void add() {
+            add(flecs::type_id<T>());
+        }
+
+        template <typename T>
+        void remove() {
+            remove(flecs::type_id<T>());
+        }
+    };
 
     input(flecs::world& ecs) {
         // Load module contents
@@ -202,6 +455,9 @@ public:
         // Bind C++ types with module contents
         ecs.module<flecs::components::input>();
         ecs.component<Input>();
+        ecs.component<InputState>();
+        ecs.component<EventListener>();
+        ecs.component<ClassList>();
     }
 };
 

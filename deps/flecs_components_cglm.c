@@ -18,7 +18,7 @@ void FlecsComponentsCglmImport(
         .count = 3 
     });
 
-    ecs_id(vec3) = ecs_array(world, {
+    ecs_id(vec4) = ecs_array(world, {
         .entity = ecs_entity(world, {
             .name = "vec4",
             .symbol = "vec4",

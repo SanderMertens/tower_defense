@@ -1,0 +1,8 @@
+module prefabs
+using flecs.components.*
+
+prefab Particle {
+  auto_override | ParticleLifespan
+  auto_override | Rgb
+  auto_override | Box
+}

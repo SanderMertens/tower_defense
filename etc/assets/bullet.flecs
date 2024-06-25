@@ -1,0 +1,18 @@
+module prefabs
+using flecs.components.*
+
+const BulletSize = 0.1
+const BulletLifespan = 0.5
+
+prefab Bullet : Particle {
+  Rgb: {0, 0, 0}
+  Box: {$BulletSize, $BulletSize, $BulletSize}
+
+  #0.Bullet
+  #0.Particle: {
+    size_decay: 1.0,
+    color_decay: 1.0,
+    velocity_decay: 1.0,
+    lifespan: $BulletLifespan
+  }
+}

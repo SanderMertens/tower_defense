@@ -1,0 +1,21 @@
+module prefabs
+using flecs.components.*
+
+const SparkSize = 0.15
+const SparkLifespan = 0.8
+const SparkSizeDecay = 0.025
+const SparkVelocityDecay = 0.025
+const SparkInitialVelocity = 11.0
+
+prefab Spark : Particle {
+  Rgb: {1.0, 0.5, 0.2}
+  Emissive: {5.0}
+  Box: {$SparkSize, $SparkSize, $SparkSize}
+
+  #0.Particle: {
+    size_decay: $SparkSizeDecay,
+    color_decay: 1.0,
+    velocity_decay: $SparkVelocityDecay,
+    lifespan: $SparkLifespan
+  }
+}

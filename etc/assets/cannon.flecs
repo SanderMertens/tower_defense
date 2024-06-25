@@ -1,0 +1,30 @@
+module prefabs
+using flecs.components.*
+
+const TurretFireInterval = 0.12
+const TurretCannonLength = 0.6
+const TurretCannonOffset = 0.2
+
+prefab Cannon : Turret {
+  #0.Turret: {$TurretFireInterval}
+
+  Barrel : materials.Metal {
+    Box: {0.8, 0.14, 0.14}
+  }
+
+  Head : materials.CannonHead {
+    Box: {0.8, 0.4, 0.8}
+    Position3: {0, 0.8, 0}
+    Rotation3: {0, 0, 0}
+
+    BarrelLeft : Barrel {
+      (SlotOf, Cannon)
+      Position3: {$TurretCannonLength, 0, -$TurretCannonOffset}
+    }
+
+    BarrelRight : Barrel {
+      (SlotOf, Cannon)
+      Position3: {$TurretCannonLength, 0, $TurretCannonOffset}
+    }
+  }
+}

@@ -26,6 +26,7 @@
 /* Headers of public dependencies */
 #include "flecs.h"
 #include "cglm.h"
+#include "flecs_components_cglm.h"
 #include "flecs_components_transform.h"
 #include "flecs_components_geometry.h"
 #include "flecs_components_physics.h"

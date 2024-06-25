@@ -8,7 +8,6 @@ ECS_DECLARE(EcsCameraController);
 
 void FlecsGameCameraControllerImport(ecs_world_t *world);
 void FlecsGameLightControllerImport(ecs_world_t *world);
-void FlecsGameWorldCellsImport(ecs_world_t *world);
 
 static
 float randf(float max) {
@@ -49,10 +48,11 @@ ecs_entity_t get_prefab(
      * use assemblies directly vs. having to create a dummy prefab */
     ecs_entity_t result = prefab;
     if (ecs_has(world, prefab, EcsScript) && ecs_has(world, prefab, EcsComponent)) {
-        result = ecs_new(world, 0);
+        result = ecs_new(world);
         ecs_add_id(world, result, EcsPrefab);
         ecs_add_id(world, result, prefab);
     }
+
     return result;
 }
 
@@ -173,9 +173,9 @@ void generate_grid(
             float zc = (float)x * params.z_spacing - params.z_half;
             ecs_entity_t inst;
             inst = generate_tile(world, grid, xc, 0, zc, &params);
-            ecs_set(world, inst, EcsRotation3, {0, M_PI / 2, 0});
+            ecs_set(world, inst, EcsRotation3, {0, GLM_PI / 2, 0});
             inst = generate_tile(world, grid, -xc, 0, zc, &params);
-            ecs_set(world, inst, EcsRotation3, {0, M_PI / 2, 0});
+            ecs_set(world, inst, EcsRotation3, {0, GLM_PI / 2, 0});
         }
     }
 
@@ -184,7 +184,7 @@ void generate_grid(
 
 static
 void SetGrid(ecs_iter_t *it) {
-    EcsGrid *grid = ecs_field(it, EcsGrid, 1);
+    EcsGrid *grid = ecs_field(it, EcsGrid, 0);
 
     for (int i = 0; i < it->count; i ++) {
         ecs_entity_t g = it->entities[0];
@@ -207,7 +207,6 @@ void FlecsGameImport(ecs_world_t *world) {
 
     ECS_TAG_DEFINE(world, EcsCameraController);
     ECS_META_COMPONENT(world, EcsCameraAutoMove);
-    ECS_META_COMPONENT(world, EcsWorldCellCoord);
     ECS_META_COMPONENT(world, EcsTimeOfDay);
     ECS_META_COMPONENT(world, ecs_grid_slot_t);
     ECS_META_COMPONENT(world, ecs_grid_coord_t);
@@ -215,10 +214,9 @@ void FlecsGameImport(ecs_world_t *world) {
 
     FlecsGameCameraControllerImport(world);
     FlecsGameLightControllerImport(world);
-    FlecsGameWorldCellsImport(world);
 
     ecs_set_hooks(world, EcsTimeOfDay, {
-        .ctor = ecs_default_ctor
+        .ctor = flecs_default_ctor
     });
 
     ECS_OBSERVER(world, SetGrid, EcsOnSet, Grid);
@@ -264,8 +262,8 @@ void CameraControllerAddAngularVelocity(ecs_iter_t *it) {
 
 static
 void CameraControllerSyncPosition(ecs_iter_t *it) {
-    EcsCamera *camera = ecs_field(it, EcsCamera, 1);
-    EcsPosition3 *p = ecs_field(it, EcsPosition3, 2);
+    EcsCamera *camera = ecs_field(it, EcsCamera, 0);
+    EcsPosition3 *p = ecs_field(it, EcsPosition3, 1);
 
     for (int i = 0; i < it->count; i ++) {
         camera[i].position[0] = p[i].x;
@@ -276,9 +274,9 @@ void CameraControllerSyncPosition(ecs_iter_t *it) {
 
 static
 void CameraControllerSyncRotation(ecs_iter_t *it) {
-    EcsCamera *camera = ecs_field(it, EcsCamera, 1);
-    EcsPosition3 *p = ecs_field(it, EcsPosition3, 2);
-    EcsRotation3 *r = ecs_field(it, EcsRotation3, 3);
+    EcsCamera *camera = ecs_field(it, EcsCamera, 0);
+    EcsPosition3 *p = ecs_field(it, EcsPosition3, 1);
+    EcsRotation3 *r = ecs_field(it, EcsRotation3, 2);
 
     for (int i = 0; i < it->count; i ++) {
         camera[i].lookat[0] = p[i].x + sin(r[i].y) * cos(r[i].x);
@@ -289,8 +287,8 @@ void CameraControllerSyncRotation(ecs_iter_t *it) {
 
 static
 void CameraControllerSyncLookAt(ecs_iter_t *it) {
-    EcsCamera *camera = ecs_field(it, EcsCamera, 1);
-    EcsLookAt *lookat = ecs_field(it, EcsLookAt, 2);
+    EcsCamera *camera = ecs_field(it, EcsCamera, 0);
+    EcsLookAt *lookat = ecs_field(it, EcsLookAt, 1);
 
     for (int i = 0; i < it->count; i ++) {
         camera[i].lookat[0] = lookat[i].x;
@@ -301,10 +299,10 @@ void CameraControllerSyncLookAt(ecs_iter_t *it) {
 
 static
 void CameraControllerAccelerate(ecs_iter_t *it) {
-    EcsInput *input = ecs_field(it, EcsInput, 1);
-    EcsRotation3 *r = ecs_field(it, EcsRotation3, 2);
-    EcsVelocity3 *v = ecs_field(it, EcsVelocity3, 3);
-    EcsAngularVelocity *av = ecs_field(it, EcsAngularVelocity, 4);
+    EcsInput *input = ecs_field(it, EcsInput, 0);
+    EcsRotation3 *r = ecs_field(it, EcsRotation3, 1);
+    EcsVelocity3 *v = ecs_field(it, EcsVelocity3, 2);
+    EcsAngularVelocity *av = ecs_field(it, EcsAngularVelocity, 3);
 
     for (int i = 0; i < it->count; i ++) {
         float angle = r[i].y;
@@ -372,9 +370,9 @@ void camera_controller_decel(float *v_ptr, float a, float dt) {
 
 static
 void CameraControllerDecelerate(ecs_iter_t *it) {
-    EcsVelocity3 *v = ecs_field(it, EcsVelocity3, 1);
-    EcsAngularVelocity *av = ecs_field(it, EcsAngularVelocity, 2);
-    EcsRotation3 *r = ecs_field(it, EcsRotation3, 3);
+    EcsVelocity3 *v = ecs_field(it, EcsVelocity3, 0);
+    EcsAngularVelocity *av = ecs_field(it, EcsAngularVelocity, 1);
+    EcsRotation3 *r = ecs_field(it, EcsRotation3, 2);
 
     float dt = it->delta_time;
 
@@ -399,12 +397,12 @@ void CameraControllerDecelerate(ecs_iter_t *it) {
         camera_controller_decel(&av[i].x, CameraAngularDeceleration, dt);
         camera_controller_decel(&av[i].y, CameraAngularDeceleration, dt);
 
-        if (r[i].x > M_PI / 2.0) {
-            r[i].x = M_PI / 2.0 - 0.0001;
+        if (r[i].x > GLM_PI / 2.0) {
+            r[i].x = GLM_PI / 2.0 - 0.0001;
             av[i].x = 0;
         }
-        if (r[i].x < -M_PI / 2.0) {
-            r[i].x = -(M_PI / 2.0) + 0.0001;
+        if (r[i].x < -GLM_PI / 2.0) {
+            r[i].x = -(GLM_PI / 2.0) + 0.0001;
             av[i].x = 0;
         }
     }
@@ -412,8 +410,8 @@ void CameraControllerDecelerate(ecs_iter_t *it) {
 
 static
 void CameraAutoMove(ecs_iter_t *it) {
-    EcsVelocity3 *v = ecs_field(it, EcsVelocity3, 1);
-    EcsCameraAutoMove *m = ecs_field(it, EcsCameraAutoMove, 2);
+    EcsVelocity3 *v = ecs_field(it, EcsVelocity3, 0);
+    EcsCameraAutoMove *m = ecs_field(it, EcsCameraAutoMove, 1);
 
     float dt = it->delta_time;
 
@@ -501,7 +499,7 @@ static
 void LightControllerSyncRotation(ecs_iter_t *it) {
     EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 1);
     EcsPosition3 *p = ecs_field(it, EcsPosition3, 2);
-    EcsRotation3 *r = ecs_field(it, EcsRotation3, 3);
+    EcsRotation3 *r = ecs_field(it, EcsRotation3, 2);
 
     for (int i = 0; i < it->count; i ++) {
         light[i].direction[0] = p[i].x + sin(r[i].y) * cos(r[i].x);
@@ -540,7 +538,7 @@ void TimeOfDayUpdate(ecs_iter_t *it) {
 
 static
 float get_time_of_day(float t) {
-    return (t + 1.0) * M_PI;
+    return (t + 1.0) * GLM_PI;
 }
 
 static
@@ -552,8 +550,8 @@ static
 void LightControllerTimeOfDay(ecs_iter_t *it) {
     EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 1);
     EcsRotation3 *r = ecs_field(it, EcsRotation3, 2);
-    EcsRgb *color = ecs_field(it, EcsRgb, 3);
-    EcsLightIntensity *light_intensity = ecs_field(it, EcsLightIntensity, 4);
+    EcsRgb *color = ecs_field(it, EcsRgb, 2);
+    EcsLightIntensity *light_intensity = ecs_field(it, EcsLightIntensity, 3);
 
     static vec3 day = {0.8, 0.8, 0.75};
     static vec3 twilight = {1.0, 0.1, 0.01};
@@ -587,8 +585,8 @@ void LightControllerTimeOfDay(ecs_iter_t *it) {
 
 static
 void AmbientLightControllerTimeOfDay(ecs_iter_t *it) {
-    EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 1);
-    EcsCanvas *canvas = ecs_field(it, EcsCanvas, 2);
+    EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 0);
+    EcsCanvas *canvas = ecs_field(it, EcsCanvas, 1);
 
     static vec3 ambient_day = {0.03, 0.06, 0.09};
     static vec3 ambient_night = {0.001, 0.008, 0.016};
@@ -647,256 +645,5 @@ void FlecsGameLightControllerImport(ecs_world_t *world) {
     ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsDirectionalLight));
     ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsRgb));
     ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsLightIntensity));
-}
-
-
-ECS_DECLARE(EcsWorldCell);
-ECS_DECLARE(EcsWorldCellRoot);
-ECS_COMPONENT_DECLARE(WorldCells);
-ECS_COMPONENT_DECLARE(WorldCellCache);
-
-typedef struct ecs_world_quadrant_t {
-    ecs_map_t cells;
-} ecs_world_quadrant_t;
-
-typedef struct WorldCells {
-    ecs_world_quadrant_t quadrants[4];
-} WorldCells;
-
-typedef struct WorldCellCache {
-    uint64_t cell_id;
-    uint64_t old_cell_id;
-    int8_t quadrant;
-    int8_t old_quadrant;
-} WorldCellCache;
-
-static
-void flecs_game_get_cell_id(
-    WorldCellCache *cache,
-    float xf, 
-    float yf)
-{
-    int32_t x = xf;
-    int64_t y = yf;
-
-    uint8_t left = x < 0;
-    uint8_t bottom = y < 0;
-
-    x *= 1 - (2 * left);
-    y *= 1 - (2 * bottom);
-
-    x = x >> FLECS_GAME_WORLD_CELL_SHIFT;
-    y = y >> FLECS_GAME_WORLD_CELL_SHIFT;
-
-    cache->quadrant = left + bottom * 2;
-    cache->cell_id = x + (y << 32);
-}
-
-static
-ecs_entity_t flecs_game_get_cell(
-    ecs_world_t *world,
-    WorldCells *wcells,
-    const WorldCellCache *wcache)
-{
-    int8_t quadrant = wcache->quadrant;
-    uint64_t cell_id = wcache->cell_id;
-    ecs_entity_t *cell_ptr = ecs_map_ensure(
-        &wcells->quadrants[quadrant].cells, cell_id);
-    ecs_entity_t cell = *cell_ptr;
-    if (!cell) {
-        cell = *cell_ptr = ecs_new(world, EcsWorldCell);
-        ecs_add_pair(world, cell, EcsChildOf, EcsWorldCellRoot);
-
-        // Decode cell coordinates from spatial hash
-        int32_t left = (int32_t)cell_id;
-        int32_t bottom = (int32_t)(cell_id >> 32);
-        int32_t half_size = (1 << FLECS_GAME_WORLD_CELL_SHIFT) / 2;
-        bottom = bottom << FLECS_GAME_WORLD_CELL_SHIFT;
-        left = left << FLECS_GAME_WORLD_CELL_SHIFT;
-        int32_t x = left + half_size;
-        int32_t y = bottom + half_size;
-        if (wcache->quadrant & 1) {
-            x *= -1;
-        }
-        if (wcache->quadrant & 2) {
-            y *= -1;
-        }
-
-        ecs_set(world, cell, EcsWorldCellCoord, {
-            .x = x,
-            .y = y,
-            .size = 1 << FLECS_GAME_WORLD_CELL_SHIFT
-        });
-    }
-    return cell;
-}
-
-static
-void AddWorldCellCache(ecs_iter_t *it) {
-    ecs_world_t *world = it->world;
-
-    for (int i = 0; i < it->count; i ++) {
-        ecs_set(world, it->entities[i], WorldCellCache, { 
-            .cell_id = 0, .old_cell_id = -1
-        });
-    }    
-}
-
-static
-void FindWorldCell(ecs_iter_t *it) {
-    while (ecs_query_next_table(it)) {
-        if (!ecs_query_changed(NULL, it)) {
-            continue;
-        }
-
-        ecs_query_populate(it, false);
-
-        EcsPosition3 *pos = ecs_field(it, EcsPosition3, 1);
-        WorldCellCache *wcache = ecs_field(it, WorldCellCache, 2);
-
-        for (int i = 0; i < it->count; i ++) {
-            flecs_game_get_cell_id(&wcache[i], pos[i].x, pos[i].z);
-        }
-    }
-}
-
-static
-void SetWorldCell(ecs_iter_t *it) {
-    while (ecs_query_next_table(it)) {
-        if (!ecs_query_changed(NULL, it)) {
-            continue;
-        }
-
-        ecs_query_populate(it, false);
-
-        ecs_world_t *world = it->world;
-        WorldCellCache *wcache = ecs_field(it, WorldCellCache, 1);
-        WorldCells *wcells = ecs_field(it, WorldCells, 2);
-
-        for (int i = 0; i < it->count; i ++) {
-            WorldCellCache *cur = &wcache[i];
-
-            if (cur->cell_id != cur->old_cell_id || cur->quadrant != cur->old_quadrant) {
-                ecs_entity_t cell = flecs_game_get_cell(world, wcells, cur);
-                ecs_add_pair(world, it->entities[i], ecs_id(EcsWorldCell), cell);
-            }
-        }
-    }
-}
-
-static
-void ResetWorldCellCache(ecs_iter_t *it) {
-    while (ecs_query_next_table(it)) {
-        if (!ecs_query_changed(NULL, it)) {
-            continue;
-        }
-
-        ecs_query_populate(it, false);
-
-        WorldCellCache *wcache = ecs_field(it, WorldCellCache, 1);
-        bool changed = false;
-
-        for (int i = 0; i < it->count; i ++) {
-            WorldCellCache *cur = &wcache[i];
-            if (cur->old_cell_id != cur->cell_id || cur->old_quadrant != cur->quadrant) {
-                cur->old_cell_id = cur->cell_id;
-                cur->old_quadrant = cur->quadrant;
-                changed = true;
-            }
-        }
-
-        if (!changed) {
-            ecs_query_skip(it);
-        }
-    }
-}
-
-void FlecsGameWorldCellsImport(ecs_world_t *world) {
-    ECS_COMPONENT_DEFINE(world, WorldCellCache);
-    ECS_COMPONENT_DEFINE(world, WorldCells);
-    ECS_ENTITY_DEFINE(world, EcsWorldCell, Tag, Exclusive, Private);
-
-    ecs_add_id(world, ecs_id(WorldCellCache), EcsPrivate);
-
-    ecs_set_hooks(world, WorldCells, {
-        .ctor = ecs_default_ctor
-    });
-
-    EcsWorldCellRoot = ecs_entity(world, {
-        .name = "::game.worldcells",
-        .root_sep = "::"
-    });
-
-    ECS_SYSTEM(world, AddWorldCellCache, EcsOnLoad,
-        [none] flecs.components.transform.Position3(self),
-        [out]  !flecs.game.WorldCellCache(self),
-        [out]  !flecs.game.WorldCell(self),
-        [none] !flecs.components.transform.Position3(up(ChildOf)),
-        [none] !(Target, ChildOf));
-
-    ecs_system(world, {
-        .entity = ecs_entity(world, {
-            .name = "FindWorldCell",
-            .add = { ecs_dependson(EcsOnValidate) }
-        }),
-        .query = {
-            .filter.terms = {{
-                .id = ecs_id(EcsPosition3),
-                .inout = EcsIn,
-                .src.flags = EcsSelf
-            }, {
-                .id = ecs_id(WorldCellCache),
-                .inout = EcsOut,
-                .src.flags = EcsSelf
-            }}
-        },
-        .run = FindWorldCell
-    });
-
-    ecs_system(world, {
-        .entity = ecs_entity(world, {
-            .name = "SetWorldCell",
-            .add = { ecs_dependson(EcsOnValidate) }
-        }),
-        .query = {
-            .filter.terms = {{
-                .id = ecs_id(WorldCellCache),
-                .inout = EcsIn,
-                .src.flags = EcsSelf
-            }, {
-                .id = ecs_id(WorldCells),
-                .inout = EcsIn,
-                .src.flags = EcsSelf,
-                .src.id = ecs_id(WorldCells)
-            }, {
-                .id = ecs_pair(EcsWorldCell, EcsWildcard),
-                .inout = EcsOut,
-                .src.id = 0,
-                .src.flags = EcsIsEntity
-            }}
-        },
-        .run = SetWorldCell
-    });
-
-    ecs_system(world, {
-        .entity = ecs_entity(world, {
-            .name = "ResetWorldCellCache",
-            .add = { ecs_dependson(EcsOnValidate) }
-        }),
-        .query = {
-            .filter.terms = {{
-                .id = ecs_id(WorldCellCache),
-                .inout = EcsInOut,
-                .src.flags = EcsSelf
-            }}
-        },
-        .run = ResetWorldCellCache
-    });
-
-    WorldCells *wcells = ecs_singleton_get_mut(world, WorldCells);
-    ecs_map_init(&wcells->quadrants[0].cells, NULL);
-    ecs_map_init(&wcells->quadrants[1].cells, NULL);
-    ecs_map_init(&wcells->quadrants[2].cells, NULL);
-    ecs_map_init(&wcells->quadrants[3].cells, NULL);
 }
 

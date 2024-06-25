@@ -3,14 +3,14 @@
 // Based on https://threejs.org/examples/webgl_postprocessing_sao.html
 
 // Increase/decrease to trade quality for performance
-#define NUM_SAMPLES 5
+#define NUM_SAMPLES 3
 // The sample kernel uses a spiral pattern so most samples are concentrated
 // close to the center. 
 #define NUM_RINGS 3
 #define KERNEL_RADIUS 15.0
 // Misc params, tweaked to match the renderer
 #define BIAS 0.2
-#define SCALE 1.0
+#define SCALE 0.1
 // Derived constants
 #define ANGLE_STEP ((PI2 * float(NUM_RINGS)) / float(NUM_SAMPLES))
 #define INV_NUM_SAMPLES (1.0 / float(NUM_SAMPLES))

@@ -1,10 +1,5 @@
 
 #define SOKOL_IMPL
-// #ifdef __APPLE__
-// #include <OpenGL/gl3.h>
-// #else
-// #include <GL/glew.h>
-// #endif
 
 /* Code is used as an importable module, so apps must provide their own main */
 #define SOKOL_NO_ENTRY
@@ -26,11 +21,11 @@
 #define SOKOL_SHADER_PRECISION "precision highp float;\n"
 #endif
 
+#ifdef NDEBUG
+#define SOKOL_ASSERT(c)
+#else
 #define SOKOL_DEBUG
-
-// #ifdef NDEBUG
-// #define SOKOL_ASSERT(c)
-// #endif
+#endif
 
 #if defined(SOKOL_IMPL) && !defined(SOKOL_GFX_IMPL)
 #define SOKOL_GFX_IMPL

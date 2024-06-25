@@ -60,12 +60,16 @@ ECS_STRUCT(EcsCanvas, {
     char *title;
     int32_t width;
     int32_t height;
+    int32_t left;
+    int32_t right;
+    int32_t top;
+    int32_t bottom;
     ecs_entity_t camera;
     ecs_entity_t directional_light;
     EcsRgb background_color;
     EcsRgb ambient_light;
     float fog_density;
-    float fog_falloff;
+    float shadow_far;
 });
 
 /* Text & fonts */
@@ -104,6 +108,7 @@ ECS_STRUCT(EcsPadding, {
     float value;
 });
 
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -124,9 +129,19 @@ namespace components {
 
 class gui {
 public:
+    using Align = EcsAlign;
+
     struct Canvas : EcsCanvas {
         Canvas() {
             this->title = nullptr;
+
+            this->width = 0;
+            this->height = 0;
+
+            this->left = 0;
+            this->right = 0;
+            this->top = 0;
+            this->bottom = 0;
 
             this->ambient_light.r = 1.0;
             this->ambient_light.g = 1.0;

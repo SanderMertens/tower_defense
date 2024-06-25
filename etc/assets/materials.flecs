@@ -1,0 +1,26 @@
+module prefabs.materials
+using flecs.components.*
+
+prefab Beam {
+  Rgb: {0.1, 0.4, 1.0}
+  Emissive: {8.0}
+}
+
+prefab Metal {
+  Rgb: {0.1, 0.1, 0.1}
+  Specular: {1.5, 128}
+}
+
+prefab Stone {
+  Rgb: {0.4, 0.4, 0.4}
+}
+
+prefab LaserLight {
+  Rgb: {0.1, 0.3, 1.0}
+  Emissive: {3.0}
+}
+
+prefab CannonHead {
+  Rgb: {0.35, 0.4, 0.3}
+  Specular: {0.5, 25}
+}

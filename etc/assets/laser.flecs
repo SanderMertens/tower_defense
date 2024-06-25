@@ -1,0 +1,53 @@
+module prefabs
+using flecs.components.*
+
+const BeamFireInterval = 0.1
+const PI = 3.1415926
+
+prefab Laser : Turret {
+  #0.Laser
+  #0.Turret: {$BeamFireInterval}
+
+  Head {
+    Position3: {0, 0.8, 0}
+    Rotation3: {0, 0, 0}
+
+    _ : materials.Metal {
+        Box: {0.9, 0.3, 0.16}
+        Position3: {0.1, 0, -0.3}
+    }
+
+    _ : materials.Metal {
+        Box: {0.9, 0.3, 0.16}
+        Position3: {0.1, 0, 0.3}
+    }
+
+    _ : materials.LaserLight {
+        Box: {0.8, 0.1, 0.1}
+        Position3: {0.1, 0, -0.2}
+    }
+
+    _ : materials.LaserLight {
+        Box: {0.8, 0.1, 0.1}
+        Position3: {0.1, 0, 0.2}
+    }
+
+    _ : materials.Metal {
+        Box: {1.6, 0.5, 0.3}
+        Position3: {0.24, 0, 0}
+    }
+
+    _ : materials.Metal {
+        Box: {1.0, 0.16, 0.16}
+        Position3: {0.8, 0.1, 0}
+    }
+
+    Beam : materials.Beam {
+        (SlotOf, Laser)
+
+        Position3: {2, 0, 0}
+        Rotation3: {0, $PI / 2.0, 0}
+        auto_override | Box: {0, 0, 0}
+    }
+  }
+}

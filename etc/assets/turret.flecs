@@ -1,0 +1,34 @@
+module prefabs
+using flecs.components.*
+using flecs.systems.*
+
+const game = Game[Game]
+const center = $game.center
+
+prefab Turret {
+  (SpatialQuery, #0.Enemy): {
+    center: [$center.x, $center.y, $center.z],
+    size: $game.size,
+  }
+
+  (SpatialQueryResult, #0.Enemy)
+
+  auto_override | #0.Target
+  auto_override | #0.Turret
+
+  slot Base {
+    Position3: {0, 0, 0}
+
+    _ : materials.Metal {
+      Box: {0.6, 0.2, 0.6}
+      Position3: {0, 0.1, 0}
+    }
+
+    _ : materials.Metal {
+      Box: {0.4, 0.6, 0.4}
+      Position3: {0, 0.3, 0}
+    }
+  }
+
+  slot Head {}
+}

@@ -29,11 +29,11 @@ void FlecsComponentsTransformImport(
     ECS_COMPONENT_DEFINE(world, EcsProject3);
 
     ecs_set_hooks(world, EcsTransform2, {
-        .ctor = ecs_default_ctor
+        .ctor = flecs_default_ctor
     });
 
     ecs_set_hooks(world, EcsTransform3, {
-        .ctor = ecs_default_ctor
+        .ctor = flecs_default_ctor
     });
 }
 

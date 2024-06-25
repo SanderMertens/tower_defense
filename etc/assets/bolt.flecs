@@ -1,0 +1,16 @@
+module prefabs
+using flecs.components.*
+
+const BoltSize = 0.2
+const BoltSizeDecay = 0.001
+const BoltLifespan = 1.0
+
+prefab Bolt : materials.Beam, Particle {
+  Box: {$BoltSize, $BoltSize, $BoltSize}
+  #0.Particle: {
+    size_decay: $BoltSizeDecay,
+    color_decay: 1.0,
+    velocity_decay: 1.0,
+    lifespan: $BoltLifespan
+  }
+}

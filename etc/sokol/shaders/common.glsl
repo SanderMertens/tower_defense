@@ -35,3 +35,11 @@ highp float rand( const in vec2 uv ) {
     highp float dt = dot( uv.xy, vec2( a,b ) ), sn = mod( dt, PI );
     return fract( sin( sn ) * c );
 }
+
+vec4 unpack_rgba(uint packedColor) {
+    float r = float((packedColor >> 24) & 0xFFu) / 255.0;
+    float g = float((packedColor >> 16) & 0xFFu) / 255.0;
+    float b = float((packedColor >> 8) & 0xFFu) / 255.0;
+    float a = float(packedColor & 0xFFu) / 255.0;
+    return vec4(a, g, b, a);
+}
