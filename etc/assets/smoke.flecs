@@ -1,4 +1,4 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 
 const SmokeSize = 1.5
@@ -12,7 +12,7 @@ prefab Smoke : Particle {
   Box: {$SmokeSize, $SmokeSize, $SmokeSize}
   Velocity3: {0, 0.8, 0}
 
-  #0.Particle: {
+  tower_defense.Particle: {
     size_decay: $SmokeSizeDecay,
     color_decay: $SmokeColorDecay,
     velocity_decay: 1.0,

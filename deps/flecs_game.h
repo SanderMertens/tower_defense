@@ -106,6 +106,22 @@ ECS_STRUCT(EcsGrid, {
 });
 
 FLECS_GAME_API
+ECS_STRUCT(EcsParticleEmitter, {
+    ecs_entity_t particle;
+    float spawn_interval;
+    float lifespan;
+    float size_decay;
+    float color_decay;
+    float velocity_decay;
+    float t;
+});
+
+FLECS_GAME_API
+ECS_STRUCT(EcsParticle, {
+    float t;
+});
+
+FLECS_GAME_API
 void FlecsGameImport(ecs_world_t *world);
 
 #ifdef __cplusplus

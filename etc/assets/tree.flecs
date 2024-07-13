@@ -1,4 +1,4 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 using flecs.meta
 

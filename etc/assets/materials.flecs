@@ -1,4 +1,4 @@
-module prefabs.materials
+module tower_defense.materials
 using flecs.components.*
 
 prefab Beam {
@@ -8,12 +8,12 @@ prefab Beam {
 
 prefab Metal {
   Rgb: {0.1, 0.1, 0.1}
-  Specular: {15, 25}
+  Specular: {0.01, 5.0}
 }
 
 prefab DarkMetal {
   Rgb: {0.05, 0.05, 0.05}
-  Specular: {15, 25}
+  Specular: {0.01, 5.0}
 }
 
 prefab Stone {
@@ -27,5 +27,5 @@ prefab LaserLight {
 
 prefab CannonHead {
   Rgb: {0.35, 0.4, 0.3}
-  Specular: {0.5, 25}
+  Specular: {0.01, 5.0}
 }

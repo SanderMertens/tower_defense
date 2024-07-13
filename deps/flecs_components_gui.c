@@ -22,6 +22,11 @@ ECS_MOVE(EcsText, dst, src, {
     src->value = NULL;
 })
 
+ECS_CTOR(EcsCanvas, ptr, {
+    ecs_os_zeromem(ptr);
+    ptr->ambient_light_ground_intensity = 1.0;
+})
+
 void FlecsComponentsGuiImport(
     ecs_world_t *world)
 {
@@ -37,6 +42,10 @@ void FlecsComponentsGuiImport(
     ECS_META_COMPONENT(world, EcsFontStyle);
     ECS_META_COMPONENT(world, EcsAlign);
     ECS_META_COMPONENT(world, EcsPadding);
+
+    ecs_set_hooks(world, EcsCanvas, {
+        .ctor = ecs_ctor(EcsCanvas),
+    });
 
     ecs_set_hooks(world, EcsText, {
         .ctor = ecs_ctor(EcsText),

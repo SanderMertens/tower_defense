@@ -1,12 +1,12 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 
 const BeamFireInterval = 0.1
 const PI = 3.1415926
 
 prefab Laser : Turret {
-  #0.Laser
-  #0.Turret: {$BeamFireInterval}
+  tower_defense.Laser
+  tower_defense.Turret: {$BeamFireInterval}
 
   Head {
     Position3: {0, 0.8, 0}
@@ -48,6 +48,12 @@ prefab Laser : Turret {
         Position3: {2, 0, 0}
         Rotation3: {0, $PI / 2.0, 0}
         auto_override | Box: {0, 0, 0}
+
+        PointLight: {
+            color: [0.05, 0.4, 1.5]
+            intensity: 0.2
+            distance: 1.0
+        }
     }
   }
 }

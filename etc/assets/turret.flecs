@@ -1,4 +1,4 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 using flecs.systems.*
 
@@ -6,15 +6,15 @@ const game = Game[Game]
 const center = $game.center
 
 prefab Turret {
-  (SpatialQuery, #0.Enemy): {
+  (SpatialQuery, tower_defense.Enemy): {
     center: [$center.x, $center.y, $center.z],
     size: $game.size,
   }
 
-  (SpatialQueryResult, #0.Enemy)
+  (SpatialQueryResult, tower_defense.Enemy)
 
-  auto_override | #0.Target
-  auto_override | #0.Turret
+  auto_override | tower_defense.Target
+  auto_override | tower_defense.Turret
 
   slot Base {
     Position3: {0, 0, 0}

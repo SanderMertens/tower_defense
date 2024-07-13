@@ -17,13 +17,14 @@ using Color = graphics::Color;
 using Specular = graphics::Specular;
 using Emissive = graphics::Emissive;
 using Box = geometry::Box;
+using PointLight = graphics::PointLight;
 
 #define ECS_PI_2 ((float)(GLM_PI * 2))
 
 // Game constants
 static const int LevelScale = 1;
 static const float EnemySpeed = 5.0;
-static const float EnemySpawnInterval = 0.12;
+static const float EnemySpawnInterval = 0.15;
 
 static const float RecoilAmount = 0.3;
 static const float DecreaseRecoilRate = 1.5;
@@ -36,9 +37,9 @@ static const float TurretCannonOffset = 0.2;
 static const float TurretCannonLength = 0.6;
 
 static const float BulletSpeed = 26.0;
-static const float BulletDamage = 0.01;
+static const float BulletDamage = 0.015;
 
-static const float BeamDamage = 0.09;
+static const float BeamDamage = 0.2;
 static const float BeamSize = 0.06;
 
 static const float SmokeSize = 1.5;
@@ -138,6 +139,8 @@ struct Waypoints {
 
 // Components
 
+namespace tower_defense {
+
 struct Game {
     flecs::entity window;
     flecs::entity level;
@@ -146,7 +149,6 @@ struct Game {
     float size;
 };
 
-// Level component
 struct Level {
     Level() {
         map = nullptr;
@@ -173,6 +175,11 @@ struct ParticleLifespan {
         t = 0;
     }
     float t;
+};
+
+struct ExplosionLight {
+    float intensity;
+    float decay;
 };
 
 struct Enemy { };
@@ -273,8 +280,9 @@ namespace prefabs {
     };
 }
 
-// Scope for systems
-struct systems { };
+}
+
+using namespace tower_defense;
 
 // Scope for level entities (tile, path)
 struct level { };
@@ -555,9 +563,9 @@ void FireAtTarget(flecs::iter& it, size_t i,
             pos.x += 1.7 * TurretCannonLength * -v[0];
             pos.z += 1.7 * TurretCannonLength * -v[2];
             glm_vec3_scale(v, BulletSpeed, v);
-            pos.x += sin(angle) * TurretCannonOffset * turret.lr;
+            pos.x += sin(angle) * 0.8 * TurretCannonOffset * turret.lr;
             pos.y = 1.1;
-            pos.z += cos(angle) * TurretCannonOffset * turret.lr;
+            pos.z += cos(angle) * 0.8 * TurretCannonOffset * turret.lr;
 
             // Alternate between left and right barrel
             flecs::entity barrel;
@@ -573,11 +581,20 @@ void FireAtTarget(flecs::iter& it, size_t i,
 
             // Create a bullet and nozzle flash
             ecs.entity().is_a<prefabs::Bullet>()
+                .child_of<particles>()
                 .set<Position>(pos)
                 .set<Velocity>({-v[0], 0, -v[2]});
             ecs.entity().is_a<prefabs::NozzleFlash>()
+                .child_of<particles>()
                 .set<Position>(pos)
                 .set<Rotation>({0, angle, 0});
+
+            // Create nozzle flash light
+            ecs.entity()
+                .child_of<particles>()
+                .set<Position>({pos.x, pos.y, pos.z})
+                .set<PointLight>({{0.5, 0.4, 0.2}, 0.4})
+                .set<ExplosionLight>({1.0, 7.0}); 
         } else {
             // Enable laser beam
             e.target<prefabs::Laser::Head::Beam>().enable();
@@ -633,6 +650,7 @@ void BeamControl(flecs::iter& it, size_t i,
             float size = randf(0.15);
 
             it.world().scope<particles>().entity().is_a<prefabs::Ion>()
+                .child_of<particles>()
                 .set<Position>({target_pos.x, target_pos.y, target_pos.z}) 
                 .set<Box>({size, size, size})
                 .set<Velocity>({
@@ -684,7 +702,6 @@ void ProgressParticle(flecs::iter& it, size_t i,
     }
 }
 
-static
 void explode(flecs::world& ecs, Position& p, float pC, float rC, Color rgbRnd, Color rgbC) {
     // Create explosion particles that fade into smoke
     for (int s = 0; s < SmokeParticleCount * pC; s ++) {
@@ -718,6 +735,13 @@ void explode(flecs::world& ecs, Position& p, float pC, float rC, Color rgbRnd, C
             .set<Velocity>({
                 cos(x_r) * speed, fabs(cos(y_r) * speed), cos(z_r) * speed});
     }
+
+    // Create explosion light
+    ecs.entity()
+        .child_of<particles>()
+        .set<Position>({p.x, p.y, p.z})
+        .set<PointLight>({{rgbC.r, rgbC.g, rgbC.b}, 1.25f + pC / 2.0f})
+        .set<ExplosionLight>({0.75f * (0.5f + pC / 2.0f), 1.5f});
 }
 
 void HitTarget(flecs::iter& it, size_t i, Position& p, Health& h, Box& b, 
@@ -734,16 +758,16 @@ void HitTarget(flecs::iter& it, size_t i, Position& p, Health& h, Box& b,
         auto prevHealth = h.value;
         h.value -= BulletDamage;
         if (prevHealth > 0.9 && h.value < 0.9) {
-            explode(ecs, p, 0.2, 0.3, {0.0, 0.3, 0.3}, {0.0, 0.7, 0.0});
+            explode(ecs, p, 0.2, 0.3, {0.01, 0.3, 0.3}, {0.05, 0.7, 0.2});
             enemy.set<Color>({0.05, 0.2, 0.6});
         } else if (prevHealth > 0.7 && h.value < 0.7) {
-            explode(ecs, p, 0.4, 0.5, {0.0, 0.3, 0.3}, {0.0, 0.2, 0.8});
+            explode(ecs, p, 0.4, 0.5, {0.01, 0.3, 0.3}, {0.01, 0.2, 0.8});
             enemy.set<Color>({0.2, 0.05, 0.4});
         } else if (prevHealth > 0.5 && h.value < 0.5) {
-            explode(ecs, p, 0.5, 0.5, {0.3, 0.0, 0.3}, {0.0, 0.0, 0.7});
+            explode(ecs, p, 0.5, 0.5, {0.3, 0.01, 0.3}, {0.01, 0.01, 0.7});
             enemy.set<Color>({0.2, 0.05, 0.2});
         } else if (prevHealth > 0.3 && h.value < 0.3) {
-            explode(ecs, p, 0.6, 0.7, {0.5, 0.2, 0.5}, {0.8, 0.0, 0.8});
+            explode(ecs, p, 0.6, 0.7, {0.5, 0.2, 0.5}, {0.8, 0.01, 0.8});
             enemy.set<Color>({0.1, 0.03, 0.0});
         }
         hit_cooldown.value = HitCooldownInitialValue; // For color effect
@@ -754,7 +778,7 @@ void DestroyEnemy(flecs::entity e, Health& h, Position& p) {
     flecs::world ecs = e.world();
     if (h.value <= 0) {
         e.destruct();
-        explode(ecs, p, 1.0, 1.0, {0.5, 0.2, 0.0}, {0.7, 0.0, 0.0});
+        explode(ecs, p, 1.1, 1.0, {0.5, 0.2, 0.1}, {0.7, 0.1, 0.05});
     }
 }
 
@@ -764,6 +788,10 @@ void init_components(flecs::world& ecs) {
         .member("level", &Game::window)
         .member("center", &Game::center)
         .member("size", &Game::size);
+
+    ecs.component<Enemy>();
+    ecs.component<Laser>();
+    ecs.component<Bullet>();
 
     ecs.component<Particle>()
         .member("size_decay", &Particle::size_decay)
@@ -838,10 +866,13 @@ void init_level(flecs::world& ecs) {
         toZ(LevelScale * TileCountZ - 1)
     };
 
-    g.level = ecs.entity().set<Level>({path, spawn_point});
+    g.level = ecs.entity()
+        .child_of<Level>()
+        .set<Level>({path, spawn_point});
 
-    ecs.entity()
-        .set<Position>({0, -2.5, toZ(TileCountZ / 2 - 0.5)})
+    ecs.entity("GroundPlane")
+        .child_of<level>()
+        .set<Position>({0, -2.7, toZ(TileCountZ / 2 - 0.5)})
         .set<Box>({toX(TileCountX + 0.5) * 20, 5, toZ(TileCountZ + 2) * 10})
         .set<Color>({0.11, 0.15, 0.1});
 
@@ -857,7 +888,7 @@ void init_level(flecs::world& ecs) {
                 t.is_a<prefabs::Tile>();
 
                 bool canTurret = false;
-                if (x < (TileCountX * LevelScale - 1) && (z < (TileCountZ * LevelScale- 1))) {
+                if (x < (TileCountX * LevelScale - 1) && (z < (TileCountZ * LevelScale - 1))) {
                     canTurret |= (path[0](x + 1, z) == TileKind::Path);
                     canTurret |= (path[0](x, z + 1) == TileKind::Path);
                 }
@@ -867,13 +898,14 @@ void init_level(flecs::world& ecs) {
                 }
 
                 auto e = ecs.entity().set<Position>({xc, TileHeight / 2, zc});
-                if (!canTurret || (randf(1) > 0.5)) {
+                if (!canTurret || (randf(1) > 0.3)) {
                     if (randf(1) > 0.05) {
                         e.child_of<level>();
                         e.set<prefabs::Tree>({
-                            1.5 + randf(2.5),
+                            1.5f + randf(2.5),
                             randf(0.1)
                         });
+                        e.set<Rotation>({0, randf(2.0 * M_PI)});
                     } else {
                         e.destruct();
                     }
@@ -890,11 +922,11 @@ void init_level(flecs::world& ecs) {
                 t.is_a<prefabs::Tile>();
             }
         }
-    }                          
+    }
 }
 
 void init_systems(flecs::world& ecs) {
-    ecs.scope<systems>([&](){ // Keep root scope clean
+    ecs.scope(ecs.entity("tower_defense"), [&](){ // Keep root scope clean
 
     // Spawn enemies periodically
     ecs.system<const Game>("SpawnEnemy")
@@ -965,13 +997,23 @@ void init_systems(flecs::world& ecs) {
     ecs.system<Health, Position>("DestroyEnemy")
         .with<Enemy>()
         .each(DestroyEnemy);
+
+    // Decrease intensity of explosion light over time
+    ecs.system<ExplosionLight, PointLight>("UpdateExplosionLight")
+        .each([](flecs::iter& it, size_t i, ExplosionLight& l, PointLight& p) {
+            flecs::entity e = it.entity(i);
+            l.intensity -= l.decay * it.delta_time();
+            if (l.intensity <= 0) {
+                e.destruct();
+            } else {
+                p.intensity = l.intensity;
+            }
+        });
     });
 }
 
 int main(int argc, char *argv[]) {
     flecs::world ecs(argc, argv);
-
-    flecs::log::set_level(0);
 
     ecs.import<flecs::components::transform>();
     ecs.import<flecs::components::graphics>();

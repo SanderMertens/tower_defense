@@ -1,4 +1,4 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 
 const TurretFireInterval = 0.12
@@ -6,7 +6,7 @@ const TurretCannonLength = 0.6
 const TurretCannonOffset = 0.2
 
 prefab Cannon : Turret {
-  #0.Turret: {$TurretFireInterval}
+  tower_defense.Turret: {$TurretFireInterval}
 
   Barrel : materials.Metal {
     Box: {0.8, 0.14, 0.14}

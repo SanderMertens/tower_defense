@@ -1,4 +1,4 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 using flecs.systems.*
 
@@ -7,16 +7,17 @@ const center = $game.center
 const EnemySize = 0.5
 
 prefab Enemy : materials.Metal {
-  #0.Enemy
+  tower_defense.Enemy
   Health
   Box: {$EnemySize, $EnemySize, $EnemySize}
-  Specular: {4, 512}
+  Specular: {0.1, 0.1}
   auto_override | HitCooldown: {}
   auto_override | Rgb: {0.05, 0.8, 0.2}
 
-  (SpatialQuery, #0.Bullet): {
+  (SpatialQuery, tower_defense.Bullet): {
     center: [$center.x, $center.y, $center.z],
     size: $game.size,
   }
-  (SpatialQueryResult, #0.Bullet)
+
+  (SpatialQueryResult, tower_defense.Bullet)
 }

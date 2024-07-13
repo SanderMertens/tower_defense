@@ -1,4 +1,4 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 
 const BulletSize = 0.1
@@ -8,8 +8,8 @@ prefab Bullet : Particle {
   Rgb: {0, 0, 0}
   Box: {$BulletSize, $BulletSize, $BulletSize}
 
-  #0.Bullet
-  #0.Particle: {
+  tower_defense.Bullet
+  tower_defense.Particle: {
     size_decay: 1.0,
     color_decay: 1.0,
     velocity_decay: 1.0,

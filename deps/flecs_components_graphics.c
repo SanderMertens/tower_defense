@@ -48,6 +48,7 @@ void FlecsComponentsGraphicsImport(
     ECS_META_COMPONENT(world, EcsCamera);
     ECS_META_COMPONENT(world, EcsLookAt);
     ECS_META_COMPONENT(world, EcsDirectionalLight);
+    ECS_META_COMPONENT(world, EcsPointLight);
     ECS_META_COMPONENT(world, EcsSpecular);
     ECS_META_COMPONENT(world, EcsEmissive);
     ECS_META_COMPONENT(world, EcsLightIntensity);
@@ -57,6 +58,9 @@ void FlecsComponentsGraphicsImport(
     ecs_add_pair(world, ecs_id(EcsRgb), EcsOnInstantiate, EcsInherit);
     ecs_add_pair(world, ecs_id(EcsSpecular), EcsOnInstantiate, EcsInherit);
     ecs_add_pair(world, ecs_id(EcsEmissive), EcsOnInstantiate, EcsInherit);
+
+    ecs_add_pair(world, ecs_id(EcsDirectionalLight), EcsOnInstantiate, EcsInherit);
+    ecs_add_pair(world, ecs_id(EcsPointLight), EcsOnInstantiate, EcsInherit);
 
     ecs_struct(world, {
         .entity = ecs_entity(world, { 

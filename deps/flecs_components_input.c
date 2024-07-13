@@ -194,10 +194,16 @@ void FlecsComponentsInputImport(
     });
 
     ecs_entity_t classes_vec = ecs_vector(world, {
+        .entity = ecs_entity(world, {
+            .parent = ecs_id(FlecsComponentsInput),
+        }),
         .type = ecs_id(ecs_entity_t)
     });
 
     ecs_entity_t added_by_vec = ecs_vector(world, {
+        .entity = ecs_entity(world, {
+            .parent = ecs_id(FlecsComponentsInput),
+        }),
         .type = ecs_id(ecs_classlist_added_by_t)
     });
 

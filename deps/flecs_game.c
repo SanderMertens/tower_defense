@@ -9,6 +9,16 @@ ECS_DECLARE(EcsCameraController);
 void FlecsGameCameraControllerImport(ecs_world_t *world);
 void FlecsGameLightControllerImport(ecs_world_t *world);
 
+ECS_CTOR(EcsParticleEmitter, ptr, {
+    ptr->particle = 0;
+    ptr->spawn_interval = 1.0;
+    ptr->lifespan = 1000.0;
+    ptr->size_decay = 1.0;
+    ptr->color_decay = 1.0;
+    ptr->velocity_decay = 1.0;
+    ptr->t = 0;
+})
+
 static
 float randf(float max) {
     return max * (float)rand() / (float)RAND_MAX;
@@ -193,6 +203,78 @@ void SetGrid(ecs_iter_t *it) {
     }
 }
 
+static
+void ParticleEmit(ecs_iter_t *it) {
+    EcsParticleEmitter *e = ecs_field(it, EcsParticleEmitter, 0);
+    EcsBox *box = ecs_field(it, EcsBox, 1);
+
+    for (int i = 0; i < it->count; i ++) {
+        e[i].t += it->delta_time;
+        if (e[i].t > e[i].spawn_interval) {
+            e[i].t -= e[i].spawn_interval;
+
+            ecs_entity_t p = ecs_insert(it->world, 
+                {ecs_childof(it->entities[i])},
+                {ecs_isa(e[i].particle)},
+                ecs_value(EcsParticle, {
+                    .t = e[i].lifespan
+                }));
+
+            if (box) {
+                EcsPosition3 pos = {0, 0, 0};
+                pos.x = randf(box[i].width) - box[i].width / 2;
+                pos.y = randf(box[i].height) - box[i].height / 2;
+                pos.z = randf(box[i].depth) - box[i].depth / 2;
+                ecs_set_ptr(it->world, p, EcsPosition3, &pos);
+            }
+
+            ecs_set(it->world, p, EcsRotation3, { 0, randf(4 * 3.1415926), 0 });
+        }
+    }
+}
+
+static
+void ParticleProgress(ecs_iter_t *it) {
+    EcsParticle *p = ecs_field(it, EcsParticle, 0);
+    EcsParticleEmitter *e = ecs_field(it, EcsParticleEmitter, 1);
+    EcsBox *box = ecs_field(it, EcsBox, 2);
+    EcsRgb *color = ecs_field(it, EcsRgb, 3);
+    EcsVelocity3 *vel = ecs_field(it, EcsVelocity3, 4);
+
+    for (int i = 0; i < it->count; i ++) {
+        p[i].t -= it->delta_time;
+        if (p[i].t <= 0) {
+            ecs_delete(it->world, it->entities[i]);
+        }
+    }
+
+    if (box) {
+        for (int i = 0; i < it->count; i ++) {
+            box[i].width *= pow(e[i].size_decay, it->delta_time);
+            box[i].height *= pow(e[i].size_decay, it->delta_time);
+            box[i].depth *= pow(e[i].size_decay, it->delta_time);
+
+            if ((box[i].width + box[i].height + box[i].depth) < 0.1) {
+                ecs_delete(it->world, it->entities[i]);
+            }
+        }
+    }
+    if (color) {
+        for (int i = 0; i < it->count; i ++) {
+            color[i].r *= pow(e[i].color_decay, it->delta_time);
+            color[i].g *= pow(e[i].color_decay, it->delta_time);
+            color[i].b *= pow(e[i].color_decay, it->delta_time);
+        } 
+    }
+    if (vel) {
+        for (int i = 0; i < it->count; i ++) {
+            vel[i].x *= pow(e[i].velocity_decay, it->delta_time);
+            vel[i].y *= pow(e[i].velocity_decay, it->delta_time);
+            vel[i].z *= pow(e[i].velocity_decay, it->delta_time);
+        }
+    }
+}
+
 void FlecsGameImport(ecs_world_t *world) {
     ECS_MODULE(world, FlecsGame);
 
@@ -211,6 +293,8 @@ void FlecsGameImport(ecs_world_t *world) {
     ECS_META_COMPONENT(world, ecs_grid_slot_t);
     ECS_META_COMPONENT(world, ecs_grid_coord_t);
     ECS_META_COMPONENT(world, EcsGrid);
+    ECS_META_COMPONENT(world, EcsParticleEmitter);
+    ECS_META_COMPONENT(world, EcsParticle);
 
     FlecsGameCameraControllerImport(world);
     FlecsGameLightControllerImport(world);
@@ -220,6 +304,21 @@ void FlecsGameImport(ecs_world_t *world) {
     });
 
     ECS_OBSERVER(world, SetGrid, EcsOnSet, Grid);
+
+    ecs_set_hooks(world, EcsParticleEmitter, {
+        .ctor = ecs_ctor(EcsParticleEmitter)
+    });
+
+    ECS_SYSTEM(world, ParticleEmit, EcsOnUpdate, 
+        ParticleEmitter,
+        ?flecs.components.geometry.Box);
+
+    ECS_SYSTEM(world, ParticleProgress, EcsOnUpdate, 
+        Particle, 
+        ParticleEmitter(up),
+        ?flecs.components.geometry.Box(self),
+        ?flecs.components.graphics.Rgb(self),
+        ?flecs.components.physics.Velocity3(self));
 }
 
 
@@ -485,8 +584,8 @@ void FlecsGameCameraControllerImport(ecs_world_t *world) {
 
 static
 void LightControllerSyncPosition(ecs_iter_t *it) {
-    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 1);
-    EcsPosition3 *p = ecs_field(it, EcsPosition3, 2);
+    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 0);
+    EcsPosition3 *p = ecs_field(it, EcsPosition3, 1);
 
     for (int i = 0; i < it->count; i ++) {
         light[i].position[0] = p[i].x;
@@ -497,8 +596,8 @@ void LightControllerSyncPosition(ecs_iter_t *it) {
 
 static
 void LightControllerSyncRotation(ecs_iter_t *it) {
-    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 1);
-    EcsPosition3 *p = ecs_field(it, EcsPosition3, 2);
+    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 0);
+    EcsPosition3 *p = ecs_field(it, EcsPosition3, 1);
     EcsRotation3 *r = ecs_field(it, EcsRotation3, 2);
 
     for (int i = 0; i < it->count; i ++) {
@@ -510,8 +609,8 @@ void LightControllerSyncRotation(ecs_iter_t *it) {
 
 static
 void LightControllerSyncColor(ecs_iter_t *it) {
-    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 1);
-    EcsRgb *color = ecs_field(it, EcsRgb, 2);
+    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 0);
+    EcsRgb *color = ecs_field(it, EcsRgb, 1);
 
     for (int i = 0; i < it->count; i ++) {
         light[i].color[0] = color[i].r;
@@ -522,8 +621,8 @@ void LightControllerSyncColor(ecs_iter_t *it) {
 
 static
 void LightControllerSyncIntensity(ecs_iter_t *it) {
-    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 1);
-    EcsLightIntensity *intensity = ecs_field(it, EcsLightIntensity, 2);
+    EcsDirectionalLight *light = ecs_field(it, EcsDirectionalLight, 0);
+    EcsLightIntensity *intensity = ecs_field(it, EcsLightIntensity, 1);
 
     for (int i = 0; i < it->count; i ++) {
         light[i].intensity = intensity[i].value;
@@ -532,7 +631,7 @@ void LightControllerSyncIntensity(ecs_iter_t *it) {
 
 static
 void TimeOfDayUpdate(ecs_iter_t *it) {
-    EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 1);
+    EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 0);
     tod->t += it->delta_time * tod->speed;
 }
 
@@ -548,8 +647,8 @@ float get_sun_height(float t) {
 
 static
 void LightControllerTimeOfDay(ecs_iter_t *it) {
-    EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 1);
-    EcsRotation3 *r = ecs_field(it, EcsRotation3, 2);
+    EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 0);
+    EcsRotation3 *r = ecs_field(it, EcsRotation3, 1);
     EcsRgb *color = ecs_field(it, EcsRgb, 2);
     EcsLightIntensity *light_intensity = ecs_field(it, EcsLightIntensity, 3);
 

@@ -68,6 +68,10 @@ ECS_STRUCT(EcsCanvas, {
     ecs_entity_t directional_light;
     EcsRgb background_color;
     EcsRgb ambient_light;
+    EcsRgb ambient_light_ground;
+    float ambient_light_ground_falloff;
+    float ambient_light_ground_offset;
+    float ambient_light_ground_intensity;
     float fog_density;
     float shadow_far;
 });

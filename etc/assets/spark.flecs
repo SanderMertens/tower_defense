@@ -1,4 +1,4 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 
 const SparkSize = 0.15
@@ -12,7 +12,7 @@ prefab Spark : Particle {
   Emissive: {5.0}
   Box: {$SparkSize, $SparkSize, $SparkSize}
 
-  #0.Particle: {
+  tower_defense.Particle: {
     size_decay: $SparkSizeDecay,
     color_decay: 1.0,
     velocity_decay: $SparkVelocityDecay,

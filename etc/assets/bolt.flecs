@@ -1,4 +1,4 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 
 const BoltSize = 0.2
@@ -7,7 +7,7 @@ const BoltLifespan = 1.0
 
 prefab Bolt : materials.Beam, Particle {
   Box: {$BoltSize, $BoltSize, $BoltSize}
-  #0.Particle: {
+  tower_defense.Particle: {
     size_decay: $BoltSizeDecay,
     color_decay: 1.0,
     velocity_decay: 1.0,

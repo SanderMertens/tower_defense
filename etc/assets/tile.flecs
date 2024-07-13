@@ -1,4 +1,4 @@
-module prefabs
+module tower_defense.prefabs
 using flecs.components.*
 
 const TileSize = 3.0
@@ -7,12 +7,11 @@ const PathHeight = 0.01
 
 prefab Tile {
   Rgb: {0.2, 0.3, 0.15}
-  Specular: {0.25, 20}
   Box: {$TileSize, $TileHeight, $TileSize}
 }
 
 prefab Path {
   Rgb: {0.15, 0.15, 0.15}
-  Specular: {2, 20}
-  Box: {$TileSize, $PathHeight, $TileSize}   
+  Rectangle: {$TileSize, $TileSize}
+  Rotation3: {0.5 * 3.1415926} 
 }
