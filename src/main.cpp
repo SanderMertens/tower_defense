@@ -1034,6 +1034,7 @@ int main(int argc, char *argv[]) {
     ecs.app()
         .enable_rest()
         .enable_stats()
-        .target_fps(60)
+        // .target_fps(60)
+        .delta_time(0.016)
         .run();
 }
