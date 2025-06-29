@@ -59,6 +59,7 @@ ecs_entity_t get_prefab(
     ecs_entity_t result = prefab;
     if (ecs_has(world, prefab, EcsScript) && ecs_has(world, prefab, EcsComponent)) {
         result = ecs_new(world);
+        ecs_add_pair(world, result, EcsChildOf, parent);
         ecs_add_id(world, result, EcsPrefab);
         ecs_add_id(world, result, prefab);
     }
@@ -69,6 +70,7 @@ ecs_entity_t get_prefab(
 static
 ecs_entity_t generate_tile(
     ecs_world_t *world,
+    ecs_entity_t parent,
     const EcsGrid *grid,
     float xc,
     float yc,
@@ -98,8 +100,9 @@ ecs_entity_t generate_tile(
             }
         }
     }
-
-    ecs_entity_t inst = ecs_new_w_pair(world, EcsIsA, slot);
+    
+    ecs_entity_t inst = ecs_new_w_pair(world, EcsChildOf, parent);
+    ecs_add_pair(world, inst, EcsIsA, slot);
     ecs_set(world, inst, EcsPosition3, {xc, yc, zc});
     return inst;
 }
@@ -136,8 +139,6 @@ void generate_grid(
     params.y_var = grid->y.variation;
     params.z_var = grid->z.variation;
 
-    ecs_entity_t old_scope = ecs_set_scope(world, parent);
-
     ecs_entity_t prefab = grid->prefab;
     params.variations_total = 0;
     params.variations_count = 0;
@@ -166,7 +167,7 @@ void generate_grid(
                     float xc = (float)x * params.x_spacing - params.x_half;
                     float yc = (float)y * params.y_spacing - params.y_half;
                     float zc = (float)z * params.z_spacing - params.z_half;
-                    generate_tile(world, grid, xc, yc, zc, &params);
+                    generate_tile(world, parent, grid, xc, yc, zc, &params);
                 }
             }
         }
@@ -174,22 +175,20 @@ void generate_grid(
         for (int32_t x = 0; x < params.x_count; x ++) {
             float xc = (float)x * params.x_spacing - params.x_half;
             float zc = grid->border.z / 2 + grid->border_offset.z;
-            generate_tile(world, grid, xc, 0, -zc, &params);
-            generate_tile(world, grid, xc, 0, zc, &params);
+            generate_tile(world, parent, grid, xc, 0, -zc, &params);
+            generate_tile(world, parent, grid, xc, 0, zc, &params);
         }
 
         for (int32_t x = 0; x < params.z_count; x ++) {
             float xc = grid->border.x / 2 + grid->border_offset.x;
             float zc = (float)x * params.z_spacing - params.z_half;
             ecs_entity_t inst;
-            inst = generate_tile(world, grid, xc, 0, zc, &params);
+            inst = generate_tile(world, parent, grid, xc, 0, zc, &params);
             ecs_set(world, inst, EcsRotation3, {0, GLM_PI / 2, 0});
-            inst = generate_tile(world, grid, -xc, 0, zc, &params);
+            inst = generate_tile(world, parent, grid, -xc, 0, zc, &params);
             ecs_set(world, inst, EcsRotation3, {0, GLM_PI / 2, 0});
         }
     }
-
-    ecs_set_scope(world, old_scope);
 }
 
 static
@@ -197,7 +196,7 @@ void SetGrid(ecs_iter_t *it) {
     EcsGrid *grid = ecs_field(it, EcsGrid, 0);
 
     for (int i = 0; i < it->count; i ++) {
-        ecs_entity_t g = it->entities[0];
+        ecs_entity_t g = it->entities[i];
         ecs_delete_with(it->world, ecs_pair(EcsChildOf, g));
         generate_grid(it->world, g, &grid[i]);
     }
@@ -209,15 +208,15 @@ void ParticleEmit(ecs_iter_t *it) {
     EcsBox *box = ecs_field(it, EcsBox, 1);
 
     for (int i = 0; i < it->count; i ++) {
-        e[i].t += it->delta_time;
-        if (e[i].t > e[i].spawn_interval) {
-            e[i].t -= e[i].spawn_interval;
+        e->t += it->delta_time;
+        if (e->t > e->spawn_interval) {
+            e->t -= e->spawn_interval;
 
             ecs_entity_t p = ecs_insert(it->world, 
                 {ecs_childof(it->entities[i])},
-                {ecs_isa(e[i].particle)},
+                {ecs_isa(e->particle)},
                 ecs_value(EcsParticle, {
-                    .t = e[i].lifespan
+                    .t = e->lifespan
                 }));
 
             if (box) {
@@ -250,9 +249,9 @@ void ParticleProgress(ecs_iter_t *it) {
 
     if (box) {
         for (int i = 0; i < it->count; i ++) {
-            box[i].width *= pow(e[i].size_decay, it->delta_time);
-            box[i].height *= pow(e[i].size_decay, it->delta_time);
-            box[i].depth *= pow(e[i].size_decay, it->delta_time);
+            box[i].width *= pow(e->size_decay, it->delta_time);
+            box[i].height *= pow(e->size_decay, it->delta_time);
+            box[i].depth *= pow(e->size_decay, it->delta_time);
 
             if ((box[i].width + box[i].height + box[i].depth) < 0.1) {
                 ecs_delete(it->world, it->entities[i]);
@@ -261,16 +260,16 @@ void ParticleProgress(ecs_iter_t *it) {
     }
     if (color) {
         for (int i = 0; i < it->count; i ++) {
-            color[i].r *= pow(e[i].color_decay, it->delta_time);
-            color[i].g *= pow(e[i].color_decay, it->delta_time);
-            color[i].b *= pow(e[i].color_decay, it->delta_time);
+            color[i].r *= pow(e->color_decay, it->delta_time);
+            color[i].g *= pow(e->color_decay, it->delta_time);
+            color[i].b *= pow(e->color_decay, it->delta_time);
         } 
     }
     if (vel) {
         for (int i = 0; i < it->count; i ++) {
-            vel[i].x *= pow(e[i].velocity_decay, it->delta_time);
-            vel[i].y *= pow(e[i].velocity_decay, it->delta_time);
-            vel[i].z *= pow(e[i].velocity_decay, it->delta_time);
+            vel[i].x *= pow(e->velocity_decay, it->delta_time);
+            vel[i].y *= pow(e->velocity_decay, it->delta_time);
+            vel[i].z *= pow(e->velocity_decay, it->delta_time);
         }
     }
 }
@@ -526,27 +525,7 @@ void CameraAutoMove(ecs_iter_t *it) {
     }
 }
 
-void FlecsGameCameraControllerImport(ecs_world_t *world) {
-    ECS_SYSTEM(world, CameraControllerAddPosition, EcsOnLoad,
-        [none]   flecs.components.graphics.Camera,
-        [none]   CameraController,
-        [out]    !flecs.components.transform.Position3);
-
-    ECS_SYSTEM(world, CameraControllerAddRotation, EcsOnLoad,
-        [none]   flecs.components.graphics.Camera,
-        [none]   CameraController,
-        [out]    !flecs.components.transform.Rotation3);
-
-    ECS_SYSTEM(world, CameraControllerAddVelocity, EcsOnLoad,
-        [none]   flecs.components.graphics.Camera,
-        [none]   CameraController,
-        [out]    !flecs.components.physics.Velocity3);
-
-    ECS_SYSTEM(world, CameraControllerAddAngularVelocity, EcsOnLoad,
-        [none]   flecs.components.graphics.Camera,
-        [none]   CameraController,
-        [out]    !flecs.components.physics.AngularVelocity);
-
+void FlecsGameCameraControllerImport(ecs_world_t *world) {    
     ECS_SYSTEM(world, CameraControllerSyncPosition, EcsOnUpdate,
         [out]    flecs.components.graphics.Camera, 
         [in]     flecs.components.transform.Position3,
@@ -579,6 +558,11 @@ void FlecsGameCameraControllerImport(ecs_world_t *world) {
     ECS_SYSTEM(world, CameraAutoMove, EcsOnUpdate,
         [inout]  flecs.components.physics.Velocity3,
         [inout]  CameraAutoMove);
+
+    ecs_add_pair(world, ecs_id(EcsCameraController), EcsWith, ecs_id(EcsPosition3));
+    ecs_add_pair(world, ecs_id(EcsCameraController), EcsWith, ecs_id(EcsRotation3));
+    ecs_add_pair(world, ecs_id(EcsCameraController), EcsWith, ecs_id(EcsVelocity3));
+    ecs_add_pair(world, ecs_id(EcsCameraController), EcsWith, ecs_id(EcsAngularVelocity));
 }
 
 
@@ -632,7 +616,7 @@ void LightControllerSyncIntensity(ecs_iter_t *it) {
 static
 void TimeOfDayUpdate(ecs_iter_t *it) {
     EcsTimeOfDay *tod = ecs_field(it, EcsTimeOfDay, 0);
-    tod->t += it->delta_time * tod->speed;
+    tod->t += it->delta_system_time * tod->speed;
 }
 
 static
@@ -669,8 +653,7 @@ void LightControllerTimeOfDay(ecs_iter_t *it) {
             glm_vec3_copy(day, sun_color);
         }
 
-        /* increase just before sunrise/after sunset*/
-        float intensity = t_sin + 0.07;
+        float intensity = t_sin;
         if (intensity < 0) {
             intensity = 0;
         }
@@ -744,5 +727,10 @@ void FlecsGameLightControllerImport(ecs_world_t *world) {
     ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsDirectionalLight));
     ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsRgb));
     ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsLightIntensity));
+
+    ecs_system(world, {
+        .entity = ecs_id(TimeOfDayUpdate),
+        .interval = 1.0
+    });
 }
 

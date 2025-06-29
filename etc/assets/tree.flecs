@@ -6,12 +6,12 @@ template Tree {
   prop height = f32: 4.0
   prop variation = f32: 0.0
 
-  const trunk_height = 0.7
+  const trunk_height: 0.7
   const canopy_color = Rgb: {0.2 + $variation, 0.27, 0.12}
 
   if $height > 2.5 {
     Trunk {
-      const trunk_width = 0.5
+      const trunk_width: 0.5
 
       Position3: {0, ($trunk_height / 2), 0}
       Box: {$trunk_width, $trunk_height, $trunk_width}
@@ -19,10 +19,10 @@ template Tree {
     }
 
     Canopy {
-      const canopy_height = $height - $trunk_height
-      const canopy_y = $trunk_height + ($canopy_height / 2)
-      const canopy_width = 1.4
-      const canopy_top_width = $canopy_width - 0.5
+      const canopy_height: $height - $trunk_height
+      const canopy_y: $trunk_height + ($canopy_height / 2)
+      const canopy_width: 1.4
+      const canopy_top_width: $canopy_width - 0.5
 
       _ {
         Position3: {0, $canopy_y, 0}
@@ -37,10 +37,10 @@ template Tree {
     }
   } else {
     Bush {
-      const canopy_height = $height - 1.0
-      const canopy_y = ($canopy_height / 2)
-      const canopy_width = 1.0
-      const canopy_top_width = $canopy_width - 0.5
+      const canopy_height: $height - 1.0
+      const canopy_y: ($canopy_height / 2)
+      const canopy_width: 1.0
+      const canopy_top_width: $canopy_width - 0.5
 
       _ {
         Position3: {0, $canopy_y - 0.1, 0}

@@ -1,8 +1,8 @@
 module tower_defense.prefabs
 using flecs.components.*
 
-const BeamFireInterval = 0.1
-const PI = 3.1415926
+const BeamFireInterval: 0.1
+const PI: 3.1415926
 
 prefab Laser : Turret {
   tower_defense.Laser

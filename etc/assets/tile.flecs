@@ -1,9 +1,9 @@
 module tower_defense.prefabs
 using flecs.components.*
 
-const TileSize = 3.0
-const TileHeight = 0.6
-const PathHeight = 0.01
+const TileSize: 3.0
+const TileHeight: 0.6
+const PathHeight: 0.01
 
 prefab Tile {
   Rgb: {0.2, 0.3, 0.15}

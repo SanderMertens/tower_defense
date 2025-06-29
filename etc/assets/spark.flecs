@@ -1,11 +1,11 @@
 module tower_defense.prefabs
 using flecs.components.*
 
-const SparkSize = 0.15
-const SparkLifespan = 0.8
-const SparkSizeDecay = 0.025
-const SparkVelocityDecay = 0.025
-const SparkInitialVelocity = 11.0
+const SparkSize: 0.15
+const SparkLifespan: 0.8
+const SparkSizeDecay: 0.025
+const SparkVelocityDecay: 0.025
+const SparkInitialVelocity: 11.0
 
 prefab Spark : Particle {
   Rgb: {1.0, 0.5, 0.2}

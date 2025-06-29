@@ -1,6 +1,6 @@
 #include "flecs_systems_transform.h"
 
-void EcsApplyTransform3(ecs_iter_t *it) {
+static void transform(ecs_iter_t *it) {
     while (ecs_query_next(it)) {
         EcsTransform3 *m = ecs_field(it, EcsTransform3, 0);
         EcsTransform3 *m_parent = ecs_field(it, EcsTransform3, 1);
@@ -10,7 +10,7 @@ void EcsApplyTransform3(ecs_iter_t *it) {
         int i;
 
         if (!m_parent) {
-            if (ecs_field_is_self(it, 3)) {
+            if (ecs_field_is_self(it, 2)) {
                 for (i = 0; i < it->count; i ++) {
                     glm_translate_make(m[i].value, *(vec3*)&p[i]);
                 }
@@ -20,7 +20,7 @@ void EcsApplyTransform3(ecs_iter_t *it) {
                 }
             }
         } else {
-            if (ecs_field_is_self(it, 3)) {
+            if (ecs_field_is_self(it, 2)) {
                 for (i = 0; i < it->count; i ++) {
                     glm_translate_to(m_parent[0].value, *(vec3*)&p[i], m[i].value);
                 }
@@ -32,7 +32,7 @@ void EcsApplyTransform3(ecs_iter_t *it) {
         }
 
         if (r) {
-            if (ecs_field_is_self(it, 4)) {
+            if (ecs_field_is_self(it, 3)) {
                 for (i = 0; i < it->count; i ++) {
                     glm_rotate(m[i].value, r[i].x, (vec3){1.0, 0.0, 0.0});
                     glm_rotate(m[i].value, r[i].y, (vec3){0.0, 1.0, 0.0});
@@ -53,6 +53,15 @@ void EcsApplyTransform3(ecs_iter_t *it) {
             }
         }
     }
+}
+
+void EcsApplyTransform3(ecs_iter_t *it) {
+    transform(it);
+}
+
+void EcsApplyTransformOnce3(ecs_iter_t *it) {
+    transform(it);
+    ecs_remove_all(it->world, EcsTransformNeeded);
 }
 
 void FlecsSystemsTransformImport(
@@ -96,10 +105,54 @@ void FlecsSystemsTransformImport(
                 .id = ecs_id(EcsScale3),
                 .inout = EcsIn,
                 .oper = EcsOptional
-            }},
-            .flags = EcsQueryIsInstanced
+            },
+            {
+                .id = EcsTransformManually,
+                .oper = EcsNot
+            },
+            {
+                .id = EcsTransformOnce,
+                .oper = EcsNot
+            }}
         },
         .run = EcsApplyTransform3
+    });
+
+    ecs_system(world, {
+        .entity = ecs_entity(world, { 
+            .name = "EcsApplyTransformOnce3",
+            .add = ecs_ids( ecs_dependson(EcsOnValidate) )
+        }),
+        .query = {
+            .terms = {{ 
+                .id = ecs_id(EcsTransform3),
+                .inout = EcsOut,
+            }, {
+                .id = ecs_id(EcsTransform3), 
+                .inout = EcsIn,
+                .oper = EcsOptional,
+                .src.id = EcsCascade
+            }, {
+                .id = ecs_id(EcsPosition3),
+                .inout = EcsIn
+            }, {
+                .id = ecs_id(EcsRotation3),
+                .inout = EcsIn,
+                .oper = EcsOptional
+            }, {
+                .id = ecs_id(EcsScale3),
+                .inout = EcsIn,
+                .oper = EcsOptional
+            }, {
+                .id = EcsTransformOnce
+            }, {
+                .id = EcsTransformNeeded
+            }, {
+                .id = EcsTransformManually,
+                .oper = EcsNot
+            }}
+        },
+        .run = EcsApplyTransformOnce3
     });
 }
 

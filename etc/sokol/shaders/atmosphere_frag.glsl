@@ -41,5 +41,5 @@ void main() {
       mie_scatter_dir                 // Mie preferred scattering direction
   );
 
-  frag_color = max(vec4(atmos, 1.0), vec4(u_night_color, 1.0));
+  frag_color = vec4(atmos, 1.0) + vec4(u_night_color, 1.0);
 }

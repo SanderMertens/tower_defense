@@ -35,6 +35,25 @@ ECS_CTOR(EcsAtmosphere, ptr, {
     ptr->mie_scatter_dir = 0.758;
 })
 
+static void UpdateSelfLights(ecs_iter_t *it) {
+    EcsSelfLight *sl = ecs_field(it, EcsSelfLight, 0);
+    EcsRgb *color = ecs_field(it, EcsRgb, 1);
+    EcsEmissive *emissive = ecs_field(it, EcsEmissive, 2);
+    EcsPointLight *out = ecs_field(it, EcsPointLight, 3);
+
+    for (int i = 0; i < it->count; i ++) {
+        out[i].distance = sl[i].distance;
+        out[i].color[0] = color[i].r;
+        out[i].color[1] = color[i].g;
+        out[i].color[2] = color[i].b;
+        if (emissive) {
+            out[i].intensity = emissive[i].value;
+        } else {
+            out[i].intensity = 1.0;
+        }
+    }
+}
+
 void FlecsComponentsGraphicsImport(
     ecs_world_t *world)
 {
@@ -49,6 +68,7 @@ void FlecsComponentsGraphicsImport(
     ECS_META_COMPONENT(world, EcsLookAt);
     ECS_META_COMPONENT(world, EcsDirectionalLight);
     ECS_META_COMPONENT(world, EcsPointLight);
+    ECS_META_COMPONENT(world, EcsSelfLight);
     ECS_META_COMPONENT(world, EcsSpecular);
     ECS_META_COMPONENT(world, EcsEmissive);
     ECS_META_COMPONENT(world, EcsLightIntensity);
@@ -61,6 +81,9 @@ void FlecsComponentsGraphicsImport(
 
     ecs_add_pair(world, ecs_id(EcsDirectionalLight), EcsOnInstantiate, EcsInherit);
     ecs_add_pair(world, ecs_id(EcsPointLight), EcsOnInstantiate, EcsInherit);
+    ecs_add_pair(world, ecs_id(EcsSelfLight), EcsOnInstantiate, EcsInherit);
+
+    ecs_add_pair(world, ecs_id(EcsSelfLight), EcsWith, ecs_id(EcsPointLight));
 
     ecs_struct(world, {
         .entity = ecs_entity(world, { 
@@ -77,5 +100,11 @@ void FlecsComponentsGraphicsImport(
     ecs_set_hooks(world, EcsAtmosphere, {
         .ctor = ecs_ctor(EcsAtmosphere)
     });
+
+    ECS_SYSTEM(world, UpdateSelfLights, EcsPostUpdate,
+        [in]  SelfLight, 
+        [in]  Rgb, 
+        [in]  ?Emissive,
+        [out] PointLight);
 }
 

@@ -1,9 +1,9 @@
 module tower_defense.prefabs
 using flecs.components.*
 
-const NozzleFlashSize = 0.15
-const NozzleFlashDecay = 0.002
-const NozzleFlashLifespan = 0.2
+const NozzleFlashSize: 0.15
+const NozzleFlashDecay: 0.002
+const NozzleFlashLifespan: 0.2
 
 prefab NozzleFlash : Particle {
   Rgb: {1.0, 0.5, 0.3}

@@ -3,7 +3,7 @@
 // Based on https://threejs.org/examples/webgl_postprocessing_sao.html
 
 // Increase/decrease to trade quality for performance
-#define NUM_SAMPLES 3
+#define NUM_SAMPLES 1
 // The sample kernel uses a spiral pattern so most samples are concentrated
 // close to the center. 
 #define NUM_RINGS 3

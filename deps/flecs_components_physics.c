@@ -19,5 +19,29 @@ void FlecsComponentsPhysicsImport(
     ECS_META_COMPONENT(world, EcsAngularVelocity);
     ECS_META_COMPONENT(world, EcsBounciness);
     ECS_META_COMPONENT(world, EcsFriction);
+
+    ecs_set_hooks(world, EcsVelocity2, {
+        .ctor = flecs_default_ctor
+    });
+
+    ecs_set_hooks(world, EcsVelocity3, {
+        .ctor = flecs_default_ctor
+    });
+
+    ecs_set_hooks(world, EcsAngularSpeed, {
+        .ctor = flecs_default_ctor
+    });
+
+    ecs_set_hooks(world, EcsAngularVelocity, {
+        .ctor = flecs_default_ctor
+    });
+
+    ecs_set_hooks(world, EcsBounciness, {
+        .ctor = flecs_default_ctor
+    });
+
+    ecs_set_hooks(world, EcsFriction, {
+        .ctor = flecs_default_ctor
+    });
 }
 

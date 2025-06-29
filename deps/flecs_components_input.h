@@ -438,13 +438,13 @@ public:
         }
 
         template <typename T>
-        void add() {
-            add(flecs::type_id<T>());
+        void add(flecs::world& world) {
+            add(world.id<T>());
         }
 
         template <typename T>
-        void remove() {
-            remove(flecs::type_id<T>());
+        void remove(flecs::world& world) {
+            remove(world.id<T>());
         }
     };
 

@@ -1,8 +1,8 @@
 module tower_defense.prefabs
 using flecs.components.*
 
-const BulletSize = 0.1
-const BulletLifespan = 0.5
+const BulletSize: 0.1
+const BulletLifespan: 0.5
 
 prefab Bullet : Particle {
   Rgb: {0, 0, 0}

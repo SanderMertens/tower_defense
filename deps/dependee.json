@@ -26,7 +26,13 @@
                 "Xi",
                 "Xcursor",
                 "dl"
-            ]
+            ],
+            "${cfg debug}": {
+                "export-symbols": true
+            },
+            "${cfg sanitize}": {
+                "export-symbols": true
+            }
         },
         "${os windows}": {
             "lib": [

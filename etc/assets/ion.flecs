@@ -1,11 +1,11 @@
 module tower_defense.prefabs
 using flecs.components.*
 
-const IonSize = 0.15
-const IonLifespan = 0.8
-const IonSizeDecay = 0.025
-const IonVelocityDecay = 0.01
-const IonInitialVelocity = 11.0
+const IonSize: 0.15
+const IonLifespan: 0.8
+const IonSizeDecay: 0.025
+const IonVelocityDecay: 0.01
+const IonInitialVelocity: 11.0
 
 prefab Ion : Particle {
   Rgb: {0.1, 0.24, 1.0}

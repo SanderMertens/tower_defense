@@ -2,8 +2,8 @@ module tower_defense.prefabs
 using flecs.components.*
 using flecs.systems.*
 
-const game = Game[Game]
-const center = $game.center
+const game: Game[Game]
+const center: $game.center
 
 prefab Turret {
   (SpatialQuery, tower_defense.Enemy): {

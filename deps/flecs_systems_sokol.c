@@ -29125,7 +29125,7 @@ SOKOL_API_IMPL sg_context_desc sapp_sgcontext(void) {
 #define SOKOL_MAX_FX_OUTPUTS (8)
 #define SOKOL_MAX_FX_PASS (8)
 #define SOKOL_MAX_FX_PARAMS (32)
-#define SOKOL_SHADOW_MAP_SIZE (2048)
+#define SOKOL_SHADOW_MAP_SIZE (1024 * 8)
 #define SOKOL_DEFAULT_DEPTH_NEAR (2.0)
 #define SOKOL_DEFAULT_DEPTH_FAR (2500.0)
 #define SOKOL_MAX_LIGHTS (32)
@@ -29171,6 +29171,7 @@ typedef struct sokol_global_uniforms_t {
 
     vec3 sun_direction;
     vec3 sun_color;
+    vec3 night_color;
     vec3 sun_screen_pos;
     float sun_intensity;
 
@@ -29590,47 +29591,6 @@ void sokol_run_atmos_to_screen_pass(
 
 #endif
 
-/** @file Internal materials module.
- * 
- * Assigns material ids to new materials. Materials are uploaded to the vertex
- * shader as a uniform array with SOKOL_MAX_MATERIALS elements. The data that is
- * uploaded to the vertex shader includes this material id, which is then used
- * by the vertex shader to pass the correct material properties to the fragment
- * shader.
- */
-
-#ifndef SOKOL_MODULES_MATERIALS_H
-#define SOKOL_MODULES_MATERIALS_H
-
-
-#define SOKOL_MAX_MATERIALS (255)
-
-/* Component with material id, assigned to any entity that has material data */
-typedef struct {
-    uint32_t value;
-} SokolMaterialId;
-
-/* Element with material parameters */
-typedef struct {
-    float specular_power;
-    float shininess;
-    float emissive;
-} SokolMaterial;
-
-/* Array with material data. Is added to same entity as Renderer. */
-typedef struct {
-    bool changed;
-    SokolMaterial array[SOKOL_MAX_MATERIALS];
-} SokolMaterials;
-
-extern ECS_COMPONENT_DECLARE(SokolMaterialId);
-extern ECS_COMPONENT_DECLARE(SokolMaterials);
-
-void FlecsSystemsSokolMaterialsImport(
-    ecs_world_t *world);
-
-#endif
-
 /** @file Internal renderer module.
  */
 
@@ -29715,8 +29675,14 @@ typedef struct SokolGeometryQuery {
     ecs_entity_t component;
     ecs_query_t *parent_query;
     ecs_query_t *solid;
-    ecs_query_t *emissive;
 } SokolGeometryQuery;
+
+/* Element with material parameters */
+typedef struct {
+    float specular_power;
+    float shininess;
+    float emissive;
+} SokolMaterial;
 
 extern ECS_COMPONENT_DECLARE(SokolGeometry);
 extern ECS_COMPONENT_DECLARE(SokolGeometryQuery);
@@ -30045,7 +30011,6 @@ void FlecsSystemsSokolImport(
     ECS_IMPORT(world, FlecsComponentsGui);
     ECS_IMPORT(world, FlecsComponentsInput);
 
-    ECS_IMPORT(world, FlecsSystemsSokolMaterials);
     ECS_IMPORT(world, FlecsSystemsSokolRenderer);
     ECS_IMPORT(world, FlecsSystemsSokolGeometry);
 
@@ -30164,9 +30129,10 @@ void sokol_run_atmos_pass(
     glm_mat4_copy(state->uniforms.inv_mat_v, fs_u.inv_mat_vp);
     glm_vec3_copy(state->uniforms.eye_pos, fs_u.eye_pos);
     glm_vec3_copy(state->uniforms.sun_direction, fs_u.light_pos);
-    fs_u.night_color[0] = 0.001 / 8.0;
-    fs_u.night_color[1] = 0.008 / 8.0;
-    fs_u.night_color[2] = 0.016 / 8.0;
+    glm_vec3_copy((float*)&state->atmosphere->night_color, fs_u.night_color);
+    // fs_u.night_color[0] = 0.001 / 8.0;
+    // fs_u.night_color[1] = 0.008 / 8.0;
+    // fs_u.night_color[2] = 0.016 / 8.0;
     fs_u.aspect = state->uniforms.aspect;
     fs_u.offset = 0.05;
 
@@ -30188,7 +30154,6 @@ void sokol_run_atmos_pass(
     sg_bindings bind = { .vertex_buffers = { state->resources->quad } };
     sg_apply_bindings(&bind);
     sg_draw(0, 6, 1);
-    sg_end_pass();
 
     sg_end_pass();
 }
@@ -31624,11 +31589,6 @@ void sokol_run_scene_pass(
     /* Render to offscreen texture so screen-space effects can be applied */
     sg_begin_pass(pass->pass, &pass->pass_action);
 
-    /* Step 1: render atmosphere background */
-    sg_apply_pipeline(pass->pip_2);
-    sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, &(sg_range){&fs_sun_atmos_u, sizeof(scene_fs_sun_atmos_uniforms_t)});
-    scene_draw_atmos(state);
-
     /* Step 2: render scene */
     sg_apply_pipeline(pass->pip);
     sg_apply_uniforms(SG_SHADERSTAGE_VS, 0, &(sg_range){&vs_u, sizeof(scene_vs_uniforms_t)});
@@ -31646,6 +31606,12 @@ void sokol_run_scene_pass(
             scene_draw_instances(&geometry[b], &geometry[b].emissive, state->shadow_map);
         }
     }
+
+    /* Step 1: render atmosphere background */
+    sg_apply_pipeline(pass->pip_2);
+    sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, &(sg_range){&fs_sun_atmos_u, sizeof(scene_fs_sun_atmos_uniforms_t)});
+    scene_draw_atmos(state);
+
     sg_end_pass();
 }
 
@@ -32019,7 +31985,6 @@ void sokol_run_shadow_pass(
         
         int b;
         for (b = 0; b < qit.count; b ++) {
-            /* Only draw solids, ignore emissive and transparent (for now) */
             shadow_draw_instances(&geometry[b], &geometry[b].solid);
         }
     }
@@ -32331,7 +32296,6 @@ void sokol_geometry_buffers_fini(ecs_allocator_t *a, sokol_geometry_buffers_t* r
 static
 void sokol_free_geometry(SokolGeometry *ptr) {
     sokol_geometry_buffers_fini(ptr->allocator, &ptr->solid);
-    sokol_geometry_buffers_fini(ptr->allocator, &ptr->emissive);
     if (ptr->allocator) {
         flecs_allocator_fini(ptr->allocator);
         ecs_os_free(ptr->allocator);
@@ -32349,7 +32313,6 @@ ECS_CTOR(SokolGeometry, ptr, {
 
 
     sokol_geometry_buffers_init(ptr->allocator, &ptr->solid);
-    sokol_geometry_buffers_init(ptr->allocator, &ptr->emissive);
 })
 
 ECS_MOVE(SokolGeometry, dst, src, {
@@ -32457,8 +32420,7 @@ static
 void sokol_populate_buffers(
     SokolGeometry *geometry,
     sokol_geometry_buffers_t *buffers,
-    ecs_query_t *query,
-    const SokolMaterial *material_data)
+    ecs_query_t *query)
 {
     const ecs_world_t *world = ecs_get_world(query);
     ecs_allocator_t *a = geometry->allocator;
@@ -32473,9 +32435,10 @@ void sokol_populate_buffers(
     while (ecs_query_next(&qit)) {
         EcsTransform3 *transforms = ecs_field(&qit, EcsTransform3, 0);
         EcsRgb *colors = ecs_field(&qit, EcsRgb, 1);
-        SokolMaterialId *materials = ecs_field(&qit, SokolMaterialId, 2);
-        void *geometry_data = ecs_field_w_size(&qit, 0, 3);
-        bool geometry_self = ecs_field_is_self(&qit, 3);
+        EcsEmissive *emissive = ecs_field(&qit, EcsEmissive, 2);
+        EcsSpecular *specular = ecs_field(&qit, EcsSpecular, 3);
+        void *geometry_data = ecs_field_w_size(&qit, qit.sizes[4], 4);
+        bool geometry_self = ecs_field_is_self(&qit, 4);
 
         int32_t cur = ecs_vec_count(&buffers->colors_data);
         int32_t count = qit.count;
@@ -32498,15 +32461,42 @@ void sokol_populate_buffers(
             }
         }
 
-        // Copy material data
-        if (materials) {
-            uint64_t material_id = materials->value;
-            for (i = 0; i < count; i ++) {
-                // Fetch material data from material array. We can't pass 
-                // the material index/array to the shader as this is not
-                // supported by WebGL.
-                *ecs_vec_get_t(&buffers->materials_data, SokolMaterial, cur + i) = 
-                    material_data[material_id];
+        if (emissive || specular) {
+            SokolMaterial *m = ecs_vec_get_t(
+                &buffers->materials_data, SokolMaterial, cur);
+            if (emissive) {
+                if (ecs_field_is_self(&qit, 2)) {
+                    for (i = 0; i < count; i ++) {
+                        m[i].emissive = emissive[i].value;
+                    }
+                } else {
+                    for (i = 0; i < count; i ++) {
+                        m[i].emissive = emissive->value;
+                    }
+                }
+            } else {
+                for (i = 0; i < count; i ++) {
+                    m[i].emissive = 0;
+                }
+            }
+
+            if (specular) {
+                if (ecs_field_is_self(&qit, 3)) {
+                    for (i = 0; i < count; i ++) {
+                        m[i].specular_power = specular[i].specular_power;
+                        m[i].shininess = specular[i].shininess;
+                    }
+                } else {
+                    for (i = 0; i < count; i ++) {
+                        m[i].specular_power = specular->specular_power;
+                        m[i].shininess = specular->shininess;
+                    }
+                }
+            } else {
+                for (i = 0; i < count; i ++) {
+                    m[i].specular_power = 0;
+                    m[i].shininess = 0;
+                }
             }
         } else {
             ecs_os_memset_n(
@@ -32562,16 +32552,9 @@ void SokolPopulateGeometry(
     SokolGeometry *g = ecs_field(it, SokolGeometry, 0);
     SokolGeometryQuery *q = ecs_field(it, SokolGeometryQuery, 1);
 
-    const SokolMaterials *materials = ecs_get(
-        it->world, SokolRendererInst, SokolMaterials);
-    const SokolMaterial *material_data = materials->array;
-
     int i;
     for (i = 0; i < it->count; i ++) {
-        // Solid and emissive objects are split up, so we can treat emissive
-        // objects differently, for example when doing shadow mapping.
-        sokol_populate_buffers(&g[i], &g[i].solid, q[i].solid, material_data);
-        sokol_populate_buffers(&g[i], &g[i].emissive, q[i].emissive, material_data);
+        sokol_populate_buffers(&g[i], &g[i].solid, q[i].solid);    
     }
 }
 
@@ -32593,28 +32576,21 @@ void CreateGeometryQueries(ecs_iter_t *it) {
                 .id        = ecs_id(EcsRgb),
                 .inout     = EcsIn
             }, {
-                .id        = ecs_id(SokolMaterialId), 
-                .src.id    = EcsUp,
-                .trav      = EcsIsA,
-                .oper      = EcsOptional,
-                .inout     = EcsIn
-            }, {
-                .id        = gq[i].component, 
-                .inout     = EcsIn 
-            }, {
                 .id        = ecs_id(EcsEmissive),
                 .inout     = EcsInOutNone,
-                .oper      = EcsNot
+                .oper      = EcsOptional
             }, {
-                .id        = ecs_id(EcsPosition3),
-                .src.id    = EcsSelf,
+                .id        = ecs_id(EcsSpecular),
                 .inout     = EcsInOutNone,
+                .oper      = EcsOptional
+            }, {
+                .id        = gq[i].component, 
+                .inout     = EcsIn
             }},
-            .flags = EcsQueryIsInstanced,
             .cache_kind = EcsQueryCacheAuto
         };
 
-        /* Query for solid, non-emissive objects */
+        /* Query for solid objects */
         desc.entity = ecs_entity(world, {
             .name = ecs_get_name(world, gq[i].component),
             .parent = ecs_entity(world, {
@@ -32626,23 +32602,6 @@ void CreateGeometryQueries(ecs_iter_t *it) {
         if (!gq[i].solid) {
             char *component_str = ecs_id_str(world, gq[i].component);
             ecs_err("sokol: failed to create query for solid %s geometry", 
-                component_str);
-            ecs_os_free(component_str);
-        }
-
-        /* Query for solid, emissive objects */
-        desc.entity = ecs_entity(world, {
-            .name = ecs_get_name(world, gq[i].component),
-            .parent = ecs_entity(world, {
-                .name = "#0.flecs.systems.sokol.geometry_queries.emissive"
-            })
-        });
-
-        desc.terms[4].oper = 0; /* Remove Not operator */
-        gq[i].emissive = ecs_query_init(world, &desc);
-        if (!gq[i].emissive) {
-            char *component_str = ecs_id_str(world, gq[i].component);
-            ecs_err("sokol: failed to create query for emissive %s geometry", 
                 component_str);
             ecs_os_free(component_str);
         }
@@ -32674,7 +32633,7 @@ void FlecsSystemsSokolGeometryImport(
 
     ecs_set_scope(world, module);
 
-    /* Create queries for solid and emissive */
+    /* Create queries for solid objects */
     ECS_OBSERVER(world, CreateGeometryQueries, EcsOnSet, 
         Geometry, GeometryQuery);
 
@@ -32693,123 +32652,6 @@ void FlecsSystemsSokolGeometryImport(
     /* Create system that manages buffers */
     ECS_SYSTEM(world, SokolPopulateGeometry, EcsPreStore, 
         Geometry, [in] GeometryQuery);
-}
-
-
-ECS_COMPONENT_DECLARE(SokolMaterialId);
-ECS_COMPONENT_DECLARE(SokolMaterials);
-
-void SokolInitMaterials(ecs_iter_t *it) {
-    const SokolQuery *q = ecs_field(it, SokolQuery, 0);
-    SokolMaterials *materials = ecs_field(it, SokolMaterials, 1);
-
-    materials->changed = true;
-    materials->array[0].specular_power = 0.0;
-    materials->array[0].shininess = 1.0;
-    materials->array[0].emissive = 0.0;
-
-    if (!ecs_query_changed(q->query)) {
-        materials->changed = false;
-        return;
-    }
-
-    ecs_iter_t qit = ecs_query_iter(it->world, q->query);
-    while (ecs_query_next(&qit)) {
-        SokolMaterialId *mat = ecs_field(&qit, SokolMaterialId, 0);
-        EcsSpecular *spec = ecs_field(&qit, EcsSpecular, 1);
-        EcsEmissive *em = ecs_field(&qit, EcsEmissive, 2);
-
-        int i;
-        if (spec) {
-            for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].value;
-                materials->array[id].specular_power = spec[i].specular_power;
-                materials->array[id].shininess = spec[i].shininess;
-            }
-        } else {
-            for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].value;
-                materials->array[id].specular_power = 0;
-                materials->array[id].shininess = 1.0;
-            }            
-        }
-
-        if (em) {
-            for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].value;
-                materials->array[id].emissive = em[i].value;
-            }
-        } else {
-            for (i = 0; i < qit.count; i ++) {
-                uint16_t id = mat[i].value;
-                materials->array[id].emissive = 0;
-            }
-        }
-    }    
-}
-
-static
-void SokolRegisterMaterial(ecs_iter_t *it) {
-    static uint16_t next_material = 1; /* 0 is the default material */
-
-    int i;
-    for (i = 0; i < it->count; i ++) {
-        ecs_set(it->world, it->entities[i], SokolMaterialId, {
-            next_material ++ /* Assign material id */
-        });
-    }
-
-    ecs_assert(next_material < SOKOL_MAX_MATERIALS, 
-        ECS_INVALID_PARAMETER, NULL);
-}
-
-void FlecsSystemsSokolMaterialsImport(
-    ecs_world_t *world)
-{
-    ECS_MODULE(world, FlecsSystemsSokolMaterials);
-
-    /* Store components in parent sokol scope */
-    ecs_entity_t parent = ecs_lookup(world, "flecs.systems.sokol");
-    ecs_entity_t module = ecs_set_scope(world, parent);
-    ecs_set_name_prefix(world, "Sokol");
-
-    ECS_COMPONENT_DEFINE(world, SokolMaterialId);
-    ECS_COMPONENT_DEFINE(world, SokolMaterials);
-
-    ecs_add_pair(world, ecs_id(SokolMaterialId), EcsOnInstantiate, EcsInherit);
-
-    /* Register systems in module scope */
-    ecs_set_scope(world, module);
-
-    /* Query that finds all entities with material properties */
-    const char *material_query = 
-        "[in] flecs.systems.sokol.MaterialId(self),"
-        "[in] ?flecs.components.graphics.Specular(self),"
-        "[in] ?flecs.components.graphics.Emissive(self),"
-        "     ?Prefab";
-
-    /* System that initializes material array that's sent to vertex shader */
-    ECS_SYSTEM(world, SokolInitMaterials, EcsOnLoad,
-        [in]   sokol.Query(InitMaterials, Materials),
-        [out]  Materials);
-
-    /* Set material query for InitMaterials system */
-    ecs_set_pair(world, SokolInitMaterials, SokolQuery, ecs_id(SokolMaterials),{
-        ecs_query(world, { 
-            .entity = ecs_entity(world, {
-                .name = "#0.flecs.systems.sokol.materials.query"
-            }),
-            .expr = material_query,
-            .cache_kind = EcsQueryCacheAuto
-        })
-    });
-
-    /* Assigns material id to entities with material properties */
-    ECS_SYSTEM(world, SokolRegisterMaterial, EcsPostLoad,
-        [out] !flecs.systems.sokol.MaterialId(self),
-        [in]   flecs.components.graphics.Specular(self) || 
-               flecs.components.graphics.Emissive(self),
-               ?Prefab);
 }
 
 #include "math.h"
@@ -32978,7 +32820,7 @@ void sokol_init_light_mat_vp(
     float n = -max[2];
     float f = -min[2];
 
-    // // Discretize coordinates
+    // Discretize coordinates
     const float step_size = 16;
     l = floor(l / step_size) * step_size;
     r = ceil(r / step_size) * step_size;
@@ -33146,8 +32988,7 @@ void sokol_gather_lights(ecs_world_t *world, SokolRenderer *r, sokol_render_stat
     ecs_iter_t it = ecs_query_iter(world, r->lights_query);
     while (ecs_query_next(&it)) {
         EcsPointLight *l = ecs_field(&it, EcsPointLight, 0);
-        EcsPosition3 *p = ecs_field(&it, EcsPosition3, 1);
-        EcsTransform3 *m = ecs_field(&it, EcsTransform3, 2);
+        EcsTransform3 *m = ecs_field(&it, EcsTransform3, 1);
 
         for (int i = 0; i < it.count; i ++) {
             sokol_light_t *light = ecs_vec_append_t(
@@ -33234,6 +33075,17 @@ void SokolRender(ecs_iter_t *it) {
     if (canvas->camera) {
         state.camera = ecs_get(world, canvas->camera, EcsCamera);
         r->camera = canvas->camera;
+
+        float camera_y_offset = state.camera->position[1] - state.uniforms.shadow_far / 2;
+        if (camera_y_offset < 0) {
+            camera_y_offset = 0;
+        }
+
+        /* Increase shadow distance with camera height */
+        state.uniforms.shadow_far = glm_max(
+            state.uniforms.shadow_far, pow(camera_y_offset, 1.4));
+        state.uniforms.shadow_far = glm_min(state.uniforms.shadow_far,
+            state.camera->far_);
     }
 
     /* Get atmosphere settings */
@@ -33262,7 +33114,7 @@ void SokolRender(ecs_iter_t *it) {
     sokol_init_global_uniforms(&state);
 
     /* Collect lights for scene */
-    sokol_gather_lights(world, r, &state);
+    // sokol_gather_lights(world, r, &state);
 
     /* Compute shadow parameters and run shadow pass */
     if (canvas->directional_light) {
@@ -33301,6 +33153,8 @@ void SokolRender(ecs_iter_t *it) {
     /* HDR */
     sokol_fx_run(&fx->hdr, 1, (sg_image[]){ scene_with_fog },
         &state, &r->screen_pass);
+
+    // sokol_run_screen_pass(&r->screen_pass, r, &state, hdr);
 }
 
 static
@@ -33347,9 +33201,9 @@ void SokolInitRenderer(ecs_iter_t *it) {
     ecs_query_t *lights_query = ecs_query(world, {
         .terms = {
             { ecs_id(EcsPointLight) },
-            { ecs_id(EcsPosition3) },
             { ecs_id(EcsTransform3) }
         },
+        .cache_kind = EcsQueryCacheAuto
     });
 
     ecs_set(world, SokolRendererInst, SokolRenderer, {
@@ -33367,14 +33221,15 @@ void SokolInitRenderer(ecs_iter_t *it) {
 
     ecs_trace("sokol: canvas initialized");
 
-    ecs_set(world, SokolRendererInst, SokolMaterials, { true });
-
     ecs_set_pair(world, SokolRendererInst, SokolQuery, ecs_id(SokolGeometry), {
         ecs_query(world, { .expr = "[in] flecs.systems.sokol.Geometry" })
     });
 
     sokol_init_geometry(world, &resources);
     ecs_trace("sokol: static geometry resources initialized");
+
+    /* Run once */
+    ecs_enable(it->world, it->system, false);
 
     ecs_log_pop();
 }
@@ -33390,7 +33245,6 @@ void FlecsSystemsSokolRendererImport(
     ecs_world_t *world)
 {
     ECS_MODULE(world, FlecsSystemsSokolRenderer);
-    ECS_IMPORT(world, FlecsSystemsSokolMaterials);
     ECS_IMPORT(world, FlecsSystemsSokolGeometry);
 
     /* Create components in parent scope */

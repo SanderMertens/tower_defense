@@ -39,7 +39,7 @@ static const float TurretCannonLength = 0.6;
 static const float BulletSpeed = 26.0;
 static const float BulletDamage = 0.015;
 
-static const float BeamDamage = 0.2;
+static const float BeamDamage = 0.25;
 static const float BeamSize = 0.06;
 
 static const float SmokeSize = 1.5;
@@ -374,7 +374,7 @@ float rotate_to(float cur, float target, float increment) {
 }
 
 // Check if enemy needs to change direction
-bool find_path(Position& p, Direction& d, const Level* lvl) {
+bool find_path(Position& p, Direction& d, const Level& lvl) {
     // Check if enemy is in center of tile
     float t_x = from_x(p.x);
     float t_y = from_z(p.z);
@@ -385,7 +385,7 @@ bool find_path(Position& p, Direction& d, const Level* lvl) {
 
     // If enemy is in center of tile, decide where to go next
     if (td_x < 0.1 && td_y < 0.1) {
-        grid<TileKind> *tiles = lvl->map;
+        grid<TileKind> *tiles = lvl.map;
 
         // Compute backwards direction so we won't try to go there
         int backwards = (d.value + 2) % 4;
@@ -419,19 +419,19 @@ bool find_path(Position& p, Direction& d, const Level* lvl) {
 }
 
 void SpawnEnemy(flecs::iter& it, size_t, const Game& g) {
-    const Level* lvl = g.level.get<Level>();
+    const Level& lvl = g.level.get<Level>();
 
     it.world().entity().child_of<enemies>().is_a<prefabs::Enemy>()
         .set<Direction>({0})
         .set<Position>({
-            lvl->spawn_point.x, 1.2, lvl->spawn_point.y
+            lvl.spawn_point.x, 1.2, lvl.spawn_point.y
         });
 }
 
 void MoveEnemy(flecs::iter& it, size_t i,
     Position& p, Direction& d, const Game& g)
 {
-    const Level* lvl = g.level.get<Level>();
+    const Level& lvl = g.level.get<Level>();
 
     if (find_path(p, d, lvl)) {
         it.entity(i).destruct(); // Enemy made it to the end
@@ -449,7 +449,7 @@ void ClearTarget(Target& target, Position& p) {
             target.target = flecs::entity::null();
             target.lock = false;
         } else {
-            Position target_pos = t.get<Position>()[0];
+            Position target_pos = t.get<Position>();
             float distance = glm_vec3_distance(p, target_pos);
             if (distance > TurretRange) {
                 // Target is out of range
@@ -499,7 +499,7 @@ void AimTarget(flecs::iter& it, size_t i,
     if (enemy && enemy.is_alive()) {
         flecs::entity e = it.entity(i);
 
-        Position target_p = enemy.get<Position>()[0];
+        Position target_p = enemy.get<Position>();
         vec3 diff;
         glm_vec3_sub(target_p, target.prev_position, diff);
 
@@ -522,7 +522,7 @@ void AimTarget(flecs::iter& it, size_t i,
         float angle = look_at(p, target_p);
 
         flecs::entity head = e.target<prefabs::Turret::Head>();
-        Rotation r = head.get<Rotation>()[0];
+        Rotation r = head.get<Rotation>();
         r.y = rotate_to(r.y, angle, TurretRotateSpeed * it.delta_time());
         head.set<Rotation>(r);
         target.angle = angle;
@@ -630,7 +630,7 @@ void BeamControl(flecs::iter& it, size_t i,
         }
 
         // Position beam at enemy
-        Position target_pos = enemy.get<Position>()[0];
+        Position target_pos = enemy.get<Position>();
         float distance = glm_vec3_distance(p, target_pos);
         beam.set<Position>({ (distance / 2), 0.1, 0.0 });
         beam.set<Box>({BeamSize, BeamSize, distance});
@@ -1034,7 +1034,5 @@ int main(int argc, char *argv[]) {
     ecs.app()
         .enable_rest()
         .enable_stats()
-        // .target_fps(60)
-        .delta_time(0.016)
         .run();
 }

@@ -2,9 +2,9 @@ module tower_defense.prefabs
 using flecs.components.*
 using flecs.systems.*
 
-const game = Game[Game]
-const center = $game.center
-const EnemySize = 0.5
+const game: Game[Game]
+const center: $game.center
+const EnemySize: 0.5
 
 prefab Enemy : materials.Metal {
   tower_defense.Enemy

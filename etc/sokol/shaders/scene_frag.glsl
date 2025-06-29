@@ -39,7 +39,7 @@ float sampleShadow(sampler2D shadowMap, vec2 uv, float compare, float bias) {
 float sampleShadowPCF(sampler2D shadowMap, vec2 uv, float texel_size, float compare, float n_dot_l, float d) {
   float result = 0.0;
   float cos_theta = clamp(n_dot_l, 0.0, 1.0);
-  float bias = 0.005;
+  float bias = 0.001;
 
   if (uv.x < 0. || uv.x > 1.) {
     return 1.0;
@@ -48,14 +48,19 @@ float sampleShadowPCF(sampler2D shadowMap, vec2 uv, float texel_size, float comp
     return 1.0;
   }
 
-  for (int x = -pcf_count; x <= pcf_count; x++) {
-      for (int y = -pcf_count; y <= pcf_count; y++) {
-          result += sampleShadow(
-            shadowMap, uv + vec2(x, y) * texel_size * texel_c, compare, bias);
-      }
-  }
+  float tx = texel_size * texel_c;
 
-  result /= float(pcf_samples);
+  result += 0.075 * sampleShadow(shadowMap, uv + vec2(-1, -1) * tx, compare, bias);
+  result += 0.124 * sampleShadow(shadowMap, uv + vec2(0, -1) * tx, compare, bias);
+  result += 0.075 * sampleShadow(shadowMap, uv + vec2(1, -1) * tx, compare, bias);
+
+  result += 0.124 * sampleShadow(shadowMap, uv + vec2(-1, 0) * tx, compare, bias);
+  result += 0.204 * sampleShadow(shadowMap, uv + vec2(0, 0) * tx, compare, bias);
+  result += 0.124 * sampleShadow(shadowMap, uv + vec2(1, 0) * tx, compare, bias);
+
+  result += 0.075 * sampleShadow(shadowMap, uv + vec2(-1, 1) * tx, compare, bias);
+  result += 0.124 * sampleShadow(shadowMap, uv + vec2(0, 1) * tx, compare, bias);
+  result += 0.075 * sampleShadow(shadowMap, uv + vec2(1, 1) * tx, compare, bias);
 
   return result;
 }

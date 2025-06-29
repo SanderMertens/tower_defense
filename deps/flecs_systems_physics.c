@@ -10,6 +10,8 @@ ECS_MOVE(EcsSpatialQuery, dst, src, {
         ecs_squery_free(dst->query);
     }
 
+    ecs_os_memcpy_t(dst->center, src->center, vec3);
+    dst->size = src->size;
     dst->query = src->query;
     src->query = NULL;
 })
@@ -132,15 +134,15 @@ static
 void EcsUpdateSpatialQuery(ecs_iter_t *it) {
     EcsSpatialQuery *q = ecs_field(it, EcsSpatialQuery, 0);
 
-    int i;
-    for (i = 0; i < it->count; i ++) {
-        if (!q->query) {
+    for (int i = 0; i < it->count; i ++) {
+        if (!q[i].query) {
             char *filter_str = ecs_id_str(it->world, ecs_field_id(it, 1));
             ecs_err("missing spatial query for '%s'", filter_str);
             ecs_os_free(filter_str);
+            continue;
         }
 
-        ecs_squery_update(q->query);
+        ecs_squery_update(q[i].query);
     }
 }
 
@@ -205,10 +207,6 @@ void FlecsSystemsPhysicsImport(
 
     ECS_SYSTEM(world, EcsUpdateSpatialQuery, EcsPreUpdate, 
         SpatialQuery(self, *), ?Prefab);
-
-    ecs_system(world, { .entity = EcsMove2,   .query.flags = EcsQueryIsInstanced });
-    ecs_system(world, { .entity = EcsMove3,   .query.flags = EcsQueryIsInstanced });
-    ecs_system(world, { .entity = EcsRotate3, .query.flags = EcsQueryIsInstanced });
 
     ecs_add_pair(world, ecs_id(EcsVelocity2), 
         EcsWith, ecs_id(EcsPosition2));
@@ -709,7 +707,6 @@ ecs_squery_t* ecs_squery_new(
             { ecs_id(EcsBox) },
             { filter, .inout = EcsIn }
         },
-        .flags = EcsQueryIsInstanced,
         .cache_kind = EcsQueryCacheAuto
     });
 

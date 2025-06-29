@@ -135,20 +135,15 @@ void FlecsGameImport(ecs_world_t *world);
 namespace flecs {
 
 struct game {
-    static flecs::entity_t CameraController;
 
     game(flecs::world& ecs) {
         // Load module contents
         FlecsGameImport(ecs);
 
-        CameraController = EcsCameraController;
-
         // Bind C++ types with module contents
         ecs.module<flecs::game>();
     }
 };
-
-flecs::entity_t game::CameraController = 0;
 
 }
 
