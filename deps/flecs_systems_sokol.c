@@ -33114,7 +33114,7 @@ void SokolRender(ecs_iter_t *it) {
     sokol_init_global_uniforms(&state);
 
     /* Collect lights for scene */
-    // sokol_gather_lights(world, r, &state);
+    sokol_gather_lights(world, r, &state);
 
     /* Compute shadow parameters and run shadow pass */
     if (canvas->directional_light) {
