@@ -33199,6 +33199,7 @@ void SokolInitRenderer(ecs_iter_t *it) {
     ecs_vec_init_t(NULL, &lights, sokol_light_t, 0);
 
     ecs_query_t *lights_query = ecs_query(world, {
+        .entity = ecs_entity(world, { .name = "flecs.systems.sokol.LightsQuery"}),
         .terms = {
             { ecs_id(EcsPointLight) },
             { ecs_id(EcsTransform3) }
@@ -33254,13 +33255,15 @@ void FlecsSystemsSokolRendererImport(
 
     ECS_COMPONENT_DEFINE(world, SokolRenderer);
 
+    ecs_add_id(world, ecs_id(SokolRenderer), EcsSingleton);
+
     /* Register systems in module scope */
     ecs_set_scope(world, module);
 
     /* System that initializes renderer */
     ECS_SYSTEM(world, SokolInitRenderer, EcsOnLoad,
         flecs.components.gui.Canvas, 
-        [out] !flecs.systems.sokol.Renderer($));
+        [out] !flecs.systems.sokol.Renderer);
 
     /* Configure immediate for SokolInitRenderer as it needs direct access to
      * the world for creating queries */

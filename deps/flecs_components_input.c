@@ -141,8 +141,8 @@ void ecs_on_set(EcsClassList)(ecs_iter_t *it) {
                 ecs_add_id(world, tgt, id);
             } else {
                 /* Component, copy value */
-                void *dst = ecs_ensure_id(world, tgt, id);
-                void *src = ecs_ensure_id(world, by, id);
+                void *dst = ecs_ensure_id(world, tgt, id, (size_t)ti->size);
+                void *src = ecs_ensure_id(world, by, id, (size_t)ti->size);
                 if (ti->hooks.copy) {
                     ti->hooks.copy(dst, src, 1, ti);
                 } else {
@@ -172,6 +172,8 @@ void FlecsComponentsInputImport(
     ECS_META_COMPONENT(world, EcsInputState);
     ECS_COMPONENT_DEFINE(world, EcsEventListener);
     ECS_COMPONENT_DEFINE(world, EcsClassList);
+
+    ecs_add_id(world, ecs_id(EcsInput), EcsSingleton);
 
     ecs_add_pair(world, ecs_id(EcsEventListener), EcsWith, 
         ecs_id(EcsInputState));

@@ -822,6 +822,8 @@ void init_components(flecs::world& ecs) {
 
 void init_game(flecs::world& ecs) {
     // Singleton with global game data
+    ecs.component<Game>().add(flecs::Singleton);
+
     Game& g = ecs.ensure<Game>();
     g.center = { toX(TileCountX / 2), 0, toZ(TileCountZ / 2) };
     g.size = TileCountX * (TileSize + TileSpacing) + 2;
@@ -930,13 +932,11 @@ void init_systems(flecs::world& ecs) {
 
     // Spawn enemies periodically
     ecs.system<const Game>("SpawnEnemy")
-        .term_at(0).singleton()
         .interval(EnemySpawnInterval)
         .each(SpawnEnemy);
 
     // Move enemies
     ecs.system<Position, Direction, const Game>("MoveEnemy")
-        .term_at(2).singleton()
         .with<Enemy>()
         .each(MoveEnemy);
 
@@ -1034,5 +1034,6 @@ int main(int argc, char *argv[]) {
     ecs.app()
         .enable_rest()
         .enable_stats()
+        .target_fps(60)
         .run();
 }

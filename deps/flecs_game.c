@@ -295,6 +295,8 @@ void FlecsGameImport(ecs_world_t *world) {
     ECS_META_COMPONENT(world, EcsParticleEmitter);
     ECS_META_COMPONENT(world, EcsParticle);
 
+    ecs_add_id(world, ecs_id(EcsTimeOfDay), EcsSingleton);
+
     FlecsGameCameraControllerImport(world);
     FlecsGameLightControllerImport(world);
 
@@ -543,7 +545,7 @@ void FlecsGameCameraControllerImport(ecs_world_t *world) {
         [none]   CameraController);
 
     ECS_SYSTEM(world, CameraControllerAccelerate, EcsOnUpdate,
-        [in]     flecs.components.input.Input($),
+        [in]     flecs.components.input.Input,
         [in]     flecs.components.transform.Rotation3,
         [inout]  flecs.components.physics.Velocity3,
         [inout]  flecs.components.physics.AngularVelocity,
@@ -710,17 +712,17 @@ void FlecsGameLightControllerImport(ecs_world_t *world) {
         [in]     flecs.components.graphics.Rgb);
 
     ECS_SYSTEM(world, TimeOfDayUpdate, EcsOnUpdate,
-        [inout]   TimeOfDay($));
+        [inout]   TimeOfDay);
 
     ECS_SYSTEM(world, LightControllerTimeOfDay, EcsOnUpdate,
-        [in]      TimeOfDay($), 
+        [in]      TimeOfDay, 
         [out]     flecs.components.transform.Rotation3,
         [out]     flecs.components.graphics.Rgb,
         [out]     flecs.components.graphics.LightIntensity,
         [none]    flecs.components.graphics.Sun);
 
     ECS_SYSTEM(world, AmbientLightControllerTimeOfDay, EcsOnUpdate,
-        [in]      TimeOfDay($), 
+        [in]      TimeOfDay, 
         [out]     flecs.components.gui.Canvas);
 
     ecs_add_pair(world, EcsSun, EcsWith, ecs_id(EcsRotation3));
